@@ -6,11 +6,11 @@
   "description": "监控《战舰世界》账号对局，检测到新战绩结算时自动推送到绑定群。数据源为 Vortex 公共接口",
   "author": {
     "name": "Rcsit",
-    "url": "https://github.com/wows-yuyuko/wows-real"
+    "url": "https://github.com/Rcsit-D4/wows-battle-push"
   },
   "license": "MIT",
   "urls": {
-    "repository": "https://github.com/wows-yuyuko/wows-real",
+    "repository": "https://github.com/Rcsit-D4/wows-battle-push",
     "documentation": "https://docs.mai-mai.org/plugin/"
   },
   "host_application": {
