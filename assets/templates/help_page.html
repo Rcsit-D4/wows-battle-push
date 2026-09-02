@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { margin:0; padding:20px; font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei','WenQuanYi Zen Hei',sans-serif; $bg_style width:710px; }
+.panel { background:rgba(255,255,255,0.82); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-radius:18px; padding:22px 26px 22px 32px; margin-bottom:14px; box-shadow:0 4px 20px rgba(0,0,0,0.1); border:1px solid rgba(255,255,255,0.6); max-width:640px; margin-left:auto; margin-right:auto; }
+.header { text-align:center; padding:26px 22px; }
+.title { font-size:32px; font-weight:bold; color:#1a1a2e; margin-bottom:6px; letter-spacing:1px; }
+.subtitle { font-size:14px; color:#888; letter-spacing:4px; }
+.section-title { font-size:19px; font-weight:bold; color:#e94560; border-left:4px solid #e94560; padding-left:12px; margin-bottom:16px; letter-spacing:0.5px; }
+.cmd-item { display:flex; align-items:center; padding:10px 4px; border-bottom:1px solid rgba(0,0,0,0.06); }
+.cmd-item:last-child { border-bottom:none; }
+.cmd-left { display:flex; flex-direction:column; min-width:300px; }
+.cmd-en { color:#0f3460; font-weight:bold; font-family:Consolas,'Courier New',monospace; font-size:15px; }
+.cmd-cn { color:#16a085; font-weight:bold; font-size:15px; margin-top:3px; }
+.cmd-desc { color:#555; font-size:15px; flex:1; text-align:center; padding:0 10px; }
+.mono { font-family:Consolas,'Courier New',monospace; }
+.content-block { text-align:left; font-size:16px; color:#444; line-height:1.8; }
+.tip { color:#888; font-size:14px; text-align:center; padding:8px 0; font-style:italic; }
+</style></head><body>
+<div class="panel header">
+<div class="title">窝窝屎战绩推送</div>
+<div class="subtitle">WOWS BATTLE PUSH</div>
+</div>
+<div class="panel">
+<div class="section-title">常用命令</div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows help</span><span class="cmd-cn">/帮助</span></div><span class="cmd-desc">帮助</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows adminhelp</span><span class="cmd-cn">/管理员帮助</span></div><span class="cmd-desc">管理员命令</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows add &lt;服务器&gt; &lt;ID&gt;</span><span class="cmd-cn">/添加 &lt;服务器&gt; &lt;ID&gt;</span></div><span class="cmd-desc">添加播报账号</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows remove &lt;服务器&gt; &lt;ID&gt;</span><span class="cmd-cn">/移除 &lt;服务器&gt; &lt;ID&gt;</span></div><span class="cmd-desc">移除播报账号</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows list</span><span class="cmd-cn">/列表</span></div><span class="cmd-desc">查看监控列表</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows check</span><span class="cmd-cn">/检查</span></div><span class="cmd-desc">立即检查推送</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows lbhelp</span><span class="cmd-cn">/排行榜帮助</span></div><span class="cmd-desc">排行榜命令</span></div>
+</div>
+<div class="panel">
+<div class="section-title">服务器</div>
+<div class="content-block">CN=国服 &nbsp;&nbsp; ASIA=亚服 &nbsp;&nbsp; EU=欧服 &nbsp;&nbsp; NA=美服 &nbsp;&nbsp; RU=俄服</div>
+</div>
+<div class="panel">
+<div class="section-title">mode 说明</div>
+<div class="content-block">1=单野 &nbsp;&nbsp; 2=单野/组排 &nbsp;&nbsp; 3=ALL</div>
+</div>
+<div class="panel">
+<div class="section-title">示例</div>
+<div class="mono content-block" style="font-size:15px;color:#555;line-height:2.2;">/wows add ASIA 2052160294<br>/wows nick ASIA 2052160294 小仓空大人<br>/wows range 15000 180000<br>/wows extra kills on</div>
+</div>
+</body></html>
+
+

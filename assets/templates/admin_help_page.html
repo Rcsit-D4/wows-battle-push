@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { margin:0; padding:20px; font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei','WenQuanYi Zen Hei',sans-serif; $bg_style width:710px; }
+.panel { background:rgba(255,255,255,0.82); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-radius:18px; padding:22px 26px 22px 32px; margin-bottom:14px; box-shadow:0 4px 20px rgba(0,0,0,0.1); border:1px solid rgba(255,255,255,0.6); max-width:640px; margin-left:auto; margin-right:auto; }
+.header { text-align:center; padding:26px 22px; }
+.title { font-size:32px; font-weight:bold; color:#1a1a2e; margin-bottom:6px; letter-spacing:1px; }
+.subtitle { font-size:14px; color:#888; letter-spacing:4px; }
+.section-title { font-size:19px; font-weight:bold; color:#e94560; border-left:4px solid #e94560; padding-left:12px; margin-bottom:16px; letter-spacing:0.5px; }
+.cmd-item { display:flex; align-items:center; padding:10px 4px; border-bottom:1px solid rgba(0,0,0,0.06); }
+.cmd-item:last-child { border-bottom:none; }
+.cmd-left { display:flex; flex-direction:column; min-width:300px; }
+.cmd-en { color:#0f3460; font-weight:bold; font-family:Consolas,'Courier New',monospace; font-size:15px; }
+.cmd-cn { color:#16a085; font-weight:bold; font-size:15px; margin-top:3px; }
+.cmd-desc { color:#555; font-size:15px; flex:1; text-align:center; padding:0 10px; }
+.mono { font-family:Consolas,'Courier New',monospace; }
+.content-block { text-align:left; font-size:16px; color:#444; line-height:1.8; }
+</style></head><body>
+<div class="panel header">
+<div class="title">管理员命令</div>
+<div class="subtitle">ADMIN COMMANDS</div>
+</div>
+<div class="panel">
+<div class="section-title">推送控制</div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows on</span><span class="cmd-cn">/开启</span></div><span class="cmd-desc">开启/恢复推送</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows off</span><span class="cmd-cn">/暂停</span></div><span class="cmd-desc">暂停推送</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows status</span><span class="cmd-cn">/状态</span></div><span class="cmd-desc">查看推送配置</span></div>
+</div>
+<div class="panel">
+<div class="section-title">账号与昵称</div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows nick &lt;服务器&gt; &lt;ID&gt; [昵称]</span><span class="cmd-cn">/昵称 &lt;服务器&gt; &lt;ID&gt; [昵称]</span></div><span class="cmd-desc">设置播报昵称</span></div>
+</div>
+<div class="panel">
+<div class="section-title">播报设置</div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows mode &lt;1|2|3&gt;</span><span class="cmd-cn">/模式 &lt;1|2|3&gt;</span></div><span class="cmd-desc">对局类型显示模式</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows range &lt;低&gt; &lt;高&gt;</span><span class="cmd-cn">/伤害范围 &lt;低&gt; &lt;高&gt;</span></div><span class="cmd-desc">伤害播报范围</span></div>
+<div class="cmd-item"><div class="cmd-left"><span class="cmd-en">/wows extra &lt;项&gt; &lt;on|off&gt;</span><span class="cmd-cn">/额外播报 &lt;项&gt; &lt;on|off&gt;</span></div><span class="cmd-desc">开关额外播报</span></div>
+</div>
+<div class="panel">
+<div class="section-title">排行榜开关</div>
+$board_switches
+</div>
+<div class="panel">
+<div class="section-title">mode 说明</div>
+<div class="content-block">1=单野 &nbsp;&nbsp; 2=单野/组排 &nbsp;&nbsp; 3=ALL</div>
+</div>
+<div class="panel">
+<div class="section-title">extra 额外播报项</div>
+<div class="content-block">kills=击杀 &nbsp;&nbsp; xp=经验 &nbsp;&nbsp; pot=潜在伤害 &nbsp;&nbsp; scout=点亮伤害<br>plane=击落飞机 &nbsp;&nbsp; spot=发现舰船 &nbsp;&nbsp; surv=存活<br>cap=占点 &nbsp;&nbsp; drop=防守 &nbsp;&nbsp; record=破纪录</div>
+</div>
+</body></html>
+
+

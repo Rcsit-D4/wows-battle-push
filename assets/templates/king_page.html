@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { margin:0; padding:22px; font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','WenQuanYi Micro Hei','WenQuanYi Zen Hei',sans-serif; $bg_style width:750px; }
+.panel { background:rgba(255,255,255,0.78); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border-radius:16px; padding:24px 28px 24px 36px; margin-bottom:14px; box-shadow:0 3px 16px rgba(0,0,0,0.08); border:1px solid rgba(255,255,255,0.5); max-width:660px; margin-left:auto; margin-right:auto; }
+.header { text-align:center; padding:24px; }
+.title { font-size:38px; font-weight:bold; color:#1a1a2e; margin-bottom:4px; }
+.subtitle { font-size:16px; color:#666; letter-spacing:4px; }
+.date-tag { display:inline-block; margin-top:8px; padding:4px 16px; background:rgba(233,69,96,0.1); color:#e94560; border-radius:12px; font-size:15px; font-weight:bold; }
+
+/* 前三名 - 字号放大15% */
+.top3-row { display:flex; align-items:center; padding:16px 0; border-bottom:1px solid rgba(0,0,0,0.05); justify-content:flex-start; }
+.top3-row:last-child { border-bottom:none; }
+.rank-badge { width:55px; height:55px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:25px; font-weight:bold; margin-right:18px; flex-shrink:0; }
+.rank-1 .rank-badge { background:linear-gradient(135deg, #FFD700, #FFA500); color:#fff; box-shadow:0 2px 8px rgba(255,215,0,0.5); }
+.rank-2 .rank-badge { background:linear-gradient(135deg, #B0C4DE, #4682B4); color:#fff; box-shadow:0 2px 8px rgba(70,130,180,0.4); }
+.rank-3 .rank-badge { background:linear-gradient(135deg, #CD7F32, #8B4513); color:#fff; box-shadow:0 2px 8px rgba(139,69,19,0.4); }
+.top3-info { flex:1; position:relative; }
+.top3-name { font-weight:bold; margin-bottom:8px; display:inline-block; position:relative; }
+.rank-1 .top3-name { font-size:30px; color:#FFD700; text-shadow:0 1px 3px rgba(184,134,11,0.3); }
+.rank-2 .top3-name { font-size:25px; color:#4682B4; }
+.rank-3 .top3-name { font-size:22px; color:#CD7F32; }
+.game-id { font-size:0.65em; color:#888; font-weight:normal; margin-left:4px; }
+.ship-name { font-size:0.85em; color:#666; font-weight:normal; margin-left:8px; }
+.crown { position:absolute; top:-16px; right:-26px; font-size:23px; transform:rotate(25deg); color:#FFD700; text-shadow:0 1px 3px rgba(184,134,11,0.5); }
+.top3-stats { font-size:15px; color:#555; line-height:1.6; }
+
+/* 窝批榜：场次在名字右侧，字体比名字略大 */
+.wopi-battles { font-size:32px; font-weight:bold; color:#e94560; flex-shrink:0; margin-left:12px; }
+.rank-1 .wopi-battles { font-size:36px; }
+.rank-2 .wopi-battles { font-size:30px; }
+.rank-3 .wopi-battles { font-size:26px; }
+
+/* 其余玩家 - 字号放大15% */
+.normal-row { display:flex; align-items:center; padding:12px 0; border-bottom:1px solid rgba(0,0,0,0.05); font-size:18px; justify-content:flex-start; }
+.normal-row:last-child { border-bottom:none; }
+.normal-rank { width:40px; text-align:center; color:#888; font-weight:bold; margin-right:14px; flex-shrink:0; }
+.normal-name { flex:1; color:#333; font-weight:bold; }
+.normal-name .game-id { font-size:0.7em; }
+.normal-stats { font-size:16px; color:#666; flex-shrink:0; }
+.wopi-battles-small { font-size:20px; font-weight:bold; color:#e94560; flex-shrink:0; }
+
+.section-title { font-size:23px; font-weight:bold; color:#e94560; border-left:4px solid #e94560; padding-left:12px; margin-bottom:16px; }
+.empty { text-align:center; color:#999; font-size:20px; padding:24px 0; }
+
+/* 昨日/本月冠军 */
+.yesterday-king { text-align:center; padding:32px; }
+.yesterday-title { font-size:16px; color:#999; letter-spacing:2px; margin-bottom:10px; }
+.yesterday-name { font-size:32px; font-weight:bold; color:#FFD700; text-shadow:0 1px 3px rgba(184,134,11,0.3); margin-bottom:8px; }
+.yesterday-damage { font-size:20px; color:#555; margin-bottom:4px; }
+.yesterday-date { font-size:14px; color:#aaa; }
+</style></head><body>
+<div class="panel header">
+<div class="title">$title</div>
+<div class="subtitle">$subtitle</div>
+<div class="date-tag">$date</div>
+</div>
+$content
+</body></html>
