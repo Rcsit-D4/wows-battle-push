@@ -1,6 +1,7 @@
 {
   "manifest_version": 2,
   "version": "1.1.0",
+  "id": "wows-battle-push",
   "name": "战舰世界战绩推送",
   "description": "监控《战舰世界》账号对局，检测到新战绩结算时自动推送到绑定群。数据源为 Vortex 公共接口",
   "author": {
