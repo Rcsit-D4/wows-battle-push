@@ -39,7 +39,11 @@ BATTLE_TYPE_LABEL: dict[str, str] = {
 }
 
 ENCYCLOPEDIA_URL = "https://v3-api.wows.shinoaki.com/public/wows/encyclopedia/ship/search"
-API_HEADERS = {"Yuyuko-Client-Type": "SWAGGER;test"}
+
+# Vortex（WG 官方）请求头：中性客户端标识，不依赖 yuyuko 前缀
+VORTEX_HEADERS = {"Client-Type": "SWAGGER;test"}
+# 图鉴（shinoaki 私有服务）请求头：保留原项目客户端标识
+ENCYCLOPEDIA_HEADERS = {"Yuyuko-Client-Type": "SWAGGER;test"}
 
 DATA_FILE = "data.json"
 SHIP_MAP_REFRESH_SECONDS = 6 * 3600

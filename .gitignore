@@ -7,6 +7,8 @@ data.json
 battle.json
 *.tmp
 assets/images/*
+!assets/images/.gitkeep
+!assets/images/README.md
 
 .venv/
 venv/

@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from constants import API_HEADERS, ENCYCLOPEDIA_URL, SERVER_VORTEX
+from constants import ENCYCLOPEDIA_HEADERS, ENCYCLOPEDIA_URL, SERVER_VORTEX, VORTEX_HEADERS
 
 
 class WowsApi:
@@ -16,12 +16,13 @@ class WowsApi:
         self.timeout = timeout
         self.retries = retries
 
-    def _get(self, url: str) -> bytes:
-        """同步 HTTP GET，带重试"""
+    def _get(self, url: str, headers: dict[str, str] | None = None) -> bytes:
+        """同步 HTTP GET，带重试；headers 缺省使用 Vortex 头"""
+        headers = headers or VORTEX_HEADERS
         last_exc: Exception | None = None
         for attempt in range(self.retries):
             try:
-                req = urllib.request.Request(url, headers=API_HEADERS)
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}")
@@ -32,8 +33,8 @@ class WowsApi:
                     continue
         raise RuntimeError(f"请求失败 {url}: {last_exc}") from last_exc
 
-    async def _get_async(self, url: str) -> bytes:
-        return await asyncio.to_thread(self._get, url)
+    async def _get_async(self, url: str, headers: dict[str, str] | None = None) -> bytes:
+        return await asyncio.to_thread(self._get, url, headers)
 
     @staticmethod
     def _parse_json(raw: bytes, url: str) -> dict:
@@ -72,7 +73,9 @@ class WowsApi:
 
     async def fetch_encyclopedia(self) -> dict[int, str]:
         """返回 {shipId: 船名}，中文名优先"""
-        data = self._parse_json(await self._get_async(ENCYCLOPEDIA_URL), ENCYCLOPEDIA_URL)
+        data = self._parse_json(
+            await self._get_async(ENCYCLOPEDIA_URL, ENCYCLOPEDIA_HEADERS), ENCYCLOPEDIA_URL
+        )
         out: dict[int, str] = {}
         for it in data.get("data") or []:
             sid = it.get("shipId")

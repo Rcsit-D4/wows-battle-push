@@ -1,6 +1,12 @@
 # 战舰世界战绩推送插件（wows-battle-push）
 
-监控《战舰世界》账号对局，检测到新战绩结算时自动推送到绑定群。由 [wows-real](https://github.com/wows-yuyuko/wows-real)（Java）重置的 Python 实现，数据源为 Vortex 公共接口。
+监控《战舰世界》账号对局，检测到新战绩结算时自动推送到绑定群。由 [wows-real](https://github.com/wows-yuyuko/wows-real) 项目启发，使用Python 实现，数据源为 Vortex 公共接口。
+
+## 数据来源
+
+- **战绩数据**：来自 Vortex 公共接口。
+- **舰船图鉴**：使用 yuyuko 项目的 [https://wows.shinoaki.com](https://wows.shinoaki.com)（`v3-api.wows.shinoaki.com`），提供船名、舰种、等级等数据。
+- **项目参考**：[https://github.com/wows-yuyuko/wows-real](https://github.com/wows-yuyuko/wows-real) （作者 shinoaki）
 
 ## 功能特性
 
