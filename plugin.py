@@ -302,7 +302,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
 
     async def _check_account(
-        self, server: str, account_id: int, battle_types: list[str], push: bool
+        self, server: str, account_id: int, battle_types: list[str], push: bool,
+        stream_ids: set[str] | None = None,
     ) -> dict[str, list]:
         """拉取账号各对局类型快照，检测新对局、存战斗日志、按需推送"""
         snap_key = f"{server.upper()}:{account_id}"
@@ -351,7 +352,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             if push:
                 for ship_id, d in diffs.items():
                     ship_name = self._ship_map.get(ship_id, f"Ship{ship_id}")
-                    for stream_id in self._streams_for_account(server, account_id):
+                    streams = stream_ids if stream_ids is not None else self._streams_for_account(server, account_id)
+                    for stream_id in streams:
                         display_mode = self._get_display_mode(stream_id)
                         if not should_broadcast_type(bt, display_mode):
                             continue
@@ -588,19 +590,20 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return await self._reply(stream_id, "本群暂无监控账号")
         await self._ensure_ship_map()
         enabled_types = self._enabled_types()
-        summary: list[str] = []
+        has_new = False
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
             account_id = int(acc.get("account_id", 0))
             try:
-                results = await self._check_account(server, account_id, enabled_types, push=False)
-                new_total = sum(len(v) for v in results.values())
-                summary.append(f"· {server} {account_id}: {'检测到新对局' if new_total else '无新对局'}")
+                results = await self._check_account(
+                    server, account_id, enabled_types, push=True, stream_ids={stream_id}
+                )
+                if any(results.values()):
+                    has_new = True
             except Exception as exc:  # noqa: BLE001
                 self.ctx.logger.exception("手动检查失败 %s:%s", server, account_id)
-                summary.append(f"· {server} {account_id}: 检查失败（{exc}）")
-        text = "检查完成：\n" + "\n".join(summary) + "\n（新战绩已自动推送）"
-        return await self._reply(stream_id, text)
+        if not has_new:
+            return await self._reply(stream_id, "检查完成：当前无新对局")
 
     @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account_id>\d+)(?:\s+(?P<nickname>.+))?$")
     async def cmd_nick(self, **kwargs):
