@@ -101,17 +101,19 @@ def format_battle(
     extra = extra or {}
     is_win = d.get("wins", 0) > d.get("losses", 0)
     title = "悲报" if is_win else "喜报"
-    result = "赢了" if is_win else "输了"
     battles = d.get("battles", 1)
     damage = d.get("damage", 0)
 
     if battles > 1:
+        wins = d.get("wins", 0)
+        losses = d.get("losses", 0)
         lines = [
             f"{title}：",
-            f"{account_name}刚刚{result}{battles}场对局",
+            f"{account_name}刚刚打完{battles}场对局（{wins}胜{losses}负）",
             f"使用{ship_name},共{battles}局总伤害{damage}",
         ]
     else:
+        result = "赢了" if is_win else "输了"
         lines = [
             f"{title}：",
             f"{account_name}刚刚{result}一场对局",
@@ -119,11 +121,13 @@ def format_battle(
         ]
 
     # record 为特殊项，由插件在末尾追加破纪录文本，不在此生成行
-    for key, label in EXTRA_ITEMS.items():
-        if key == "record" or not extra.get(key):
-            continue
-        snap_key = EXTRA_SNAPSHOT_KEY.get(key, key)
-        lines.append(f"{label}{d.get(snap_key, 0)}")
+    # 多局合并不显示额外播报项（经验/击杀等），仅保留基础伤害与类型标签
+    if battles == 1:
+        for key, label in EXTRA_ITEMS.items():
+            if key == "record" or not extra.get(key):
+                continue
+            snap_key = EXTRA_SNAPSHOT_KEY.get(key, key)
+            lines.append(f"{label}{d.get(snap_key, 0)}")
 
     type_label = get_type_label(battle_type, display_mode)
     if type_label:

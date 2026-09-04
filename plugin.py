@@ -363,7 +363,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         extra = self._get_extra(stream_id)
                         display_name = self._get_display_name(stream_id, server, account_id, name)
                         text = format_battle(display_name, ship_name, d, bt, display_mode, extra)
-                        if extra.get("record") and d.get("battles", 1) == 1:
+                        if extra.get("record"):
                             broken = check_career_records(old.get(ship_id) or {}, new_snap.get(ship_id) or {})
                             if broken:
                                 text = text + "\n" + format_record_break(broken)
