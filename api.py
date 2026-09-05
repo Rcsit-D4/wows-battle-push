@@ -103,9 +103,9 @@ class WowsApi:
         results = data.get("data") or []
         target = nickname.lower()
         for r in results:  # 精确匹配（大小写不敏感）
-            if str(r.get("name", "")).lower() == target:
+            if str(r.get("name", "")).lower() == target and r.get("spa_id"):
                 return int(r["spa_id"]), str(r["name"])
-        if results:  # 无精确匹配时取第一个
-            r = results[0]
-            return int(r["spa_id"]), str(r.get("name", nickname))
+        for r in results:  # 无精确匹配时取第一个有效结果
+            if r.get("spa_id"):
+                return int(r["spa_id"]), str(r.get("name", nickname))
         return None

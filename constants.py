@@ -45,7 +45,6 @@ VORTEX_HEADERS = {"Client-Type": "SWAGGER;test"}
 # 图鉴（shinoaki 私有服务）请求头：保留原项目客户端标识
 ENCYCLOPEDIA_HEADERS = {"Yuyuko-Client-Type": "SWAGGER;test"}
 
-DATA_FILE = "data.json"
 SHIP_MAP_REFRESH_SECONDS = 6 * 3600
 
 # 额外播报项：key=指令参数, value=显示名

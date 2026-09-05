@@ -23,7 +23,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import asyncio
-import json
 import time
 from typing import Any
 
@@ -36,11 +35,11 @@ from constants import (
     EXTRA_ITEMS,
     PUBLIC_COMMANDS,
     SERVER_VORTEX,
-    DATA_FILE,
     SHIP_MAP_REFRESH_SECONDS,
     VALID_BATTLE_TYPES,
     normalize_server,
 )
+from state_store import StateStore
 from cards import (
     HELP_TEXT,
     ADMIN_HELP_TEXT,
@@ -84,6 +83,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._api = WowsApi()
         self._state: dict[str, Any] = {"version": 1, "bindings": {}, "snapshots": {}, "daily_king": {}}
         self._battle_log: BattleLogStore | None = None
+        self._store: StateStore | None = None
         self._poller_task: asyncio.Task | None = None
         self._stopped = False
         self._ship_map: dict[int, str] = {}
@@ -185,7 +185,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     # ---------- 生命周期 ----------
     async def on_load(self) -> None:
         self._load_state()
-        self._battle_log = BattleLogStore(Path(__file__).parent)
+        self._battle_log = BattleLogStore(Path(__file__).parent / "data")
         self.ctx.logger.info("插件已加载，绑定群数=%d，榜单=%s",
                              len(self._state["bindings"]), list(leaderboard.BOARDS.keys()))
         self._poller_task = asyncio.create_task(self._poller_loop())
@@ -206,35 +206,51 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             self.ctx.logger.info("配置已更新: version=%s", version)
 
     # ---------- 状态存取 ----------
-    def _state_path(self) -> Path:
-        return Path(__file__).parent / DATA_FILE
-
     def _load_state(self) -> None:
         try:
-            path = self._state_path()
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    for key in ("bindings", "snapshots", "daily_king"):
-                        data.setdefault(key, {})
-                    data.pop("records", None)  # 破纪录已改用 API 生涯字段，清理旧数据
-                    self._state = data
+            self._store = StateStore(Path(__file__).parent)
+            self._state["bindings"] = self._store.groups.get("bindings", {})
+            self._state["snapshots"] = self._store.snapshots
+            self._state["daily_king"] = self._store.leaderboard
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("读取状态文件失败，使用空状态")
 
     def _save_state(self) -> None:
-        """原子写入：先写临时文件再重命名，防止写入中断导致文件损坏"""
+        """退出时全量保存三个数据文件"""
         try:
-            path = self._state_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = path.with_suffix(path.suffix + ".tmp")
-            tmp_path.write_text(
-                json.dumps(self._state, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            tmp_path.replace(path)
+            self._sync_store()
+            self._store.save_groups()
+            self._store.save_snapshots()
+            self._store.save_leaderboard()
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("保存状态文件失败")
+
+    def _sync_store(self) -> None:
+        """把内存 state 同步到 store（不写盘）"""
+        self._store.groups["bindings"] = self._state["bindings"]
+        self._store.snapshots = self._state["snapshots"]
+        self._store.leaderboard = self._state["daily_king"]
+
+    def _save_bindings(self) -> None:
+        try:
+            self._store.groups["bindings"] = self._state["bindings"]
+            self._store.save_groups()
+        except Exception:  # noqa: BLE001
+            self.ctx.logger.exception("保存群配置失败")
+
+    def _save_snapshots(self) -> None:
+        try:
+            self._store.snapshots = self._state["snapshots"]
+            self._store.save_snapshots()
+        except Exception:  # noqa: BLE001
+            self.ctx.logger.exception("保存快照失败")
+
+    def _save_leaderboard(self) -> None:
+        try:
+            self._store.leaderboard = self._state["daily_king"]
+            self._store.save_leaderboard()
+        except Exception:  # noqa: BLE001
+            self.ctx.logger.exception("保存榜单数据失败")
 
     # ---------- 轮询 ----------
     async def _ensure_ship_map(self) -> None:
@@ -285,7 +301,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             is_monitored_fn=self._is_account_monitored,
             get_nickname_fn=self._get_group_nickname,
         ):
-            self._save_state()
+            self._save_leaderboard()
         await self._ensure_ship_map()
         accounts = self._unique_accounts()
         if not accounts:
@@ -296,10 +312,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 await self._check_account(server, account_id, enabled_types, push=True)
             except Exception:  # noqa: BLE001
                 self.ctx.logger.exception("检查账号 %s:%s 失败", server, account_id)
-        if self._battle_log:
-            removed = self._battle_log.cleanup_old(self.config.plugin.log_retention_days)
-            if removed > 0:
-                self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
+        # battle 日志暂定长久保存；如需定期清理，恢复此处 cleanup_old 调用
+        # if self._battle_log:
+        #     removed = self._battle_log.cleanup_old(self.config.plugin.log_retention_days)
+        #     if removed > 0:
+        #         self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
 
     async def _check_account(
         self, server: str, account_id: int, battle_types: list[str], push: bool,
@@ -371,7 +388,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
         if new_types:
             self._state["snapshots"][snap_key] = {"name": name, "battle_types": new_types, "updated": time.time()}
-            self._save_state()
+            self._save_snapshots()
         return results
 
     async def _refresh_snapshots_for_stream(self, stream_id: str) -> None:
@@ -400,7 +417,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self._state.setdefault("snapshots", {})[snap_key] = {
                     "name": name, "battle_types": new_types, "updated": time.time()
                 }
-        self._save_state()
+        self._save_snapshots()
 
     async def _push_to_stream(self, text: str, stream_id: str) -> None:
         try:
@@ -452,13 +469,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 "damage_low": 0, "damage_high": 0,
                 "extra": default_extra(), "paused": False,
             }
-            self._save_state()
+            self._save_bindings()
             text = "本群开启战绩推送，可用 /wows add <服务器> <账号ID> 添加播报账号"
         else:
             binding = bindings[stream_id]
             if binding.get("paused"):
                 binding["paused"] = False
-                self._save_state()
+                self._save_bindings()
                 await self._refresh_snapshots_for_stream(stream_id)
                 text = "已恢复战绩推送"
             else:
@@ -476,7 +493,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if binding.get("paused"):
             return await self._reply(stream_id, "服务已暂停")
         binding["paused"] = True
-        self._save_state()
+        self._save_bindings()
         return await self._reply(stream_id, "已暂停战绩推送，/wows on 可恢复")
 
     @Command("wows_pause", pattern=r"^/wows\s+pause$")
@@ -513,7 +530,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             if str(acc.get("server", "")).upper() == server and int(acc.get("account_id", 0)) == account_id:
                 return await self._reply(stream_id, f"账号 {server} {account_id} 已在监控列表中")
         accounts.append({"server": server, "account_id": account_id, "nickname": ""})
-        self._save_state()
+        self._save_bindings()
         text = f"已添加监控账号 {server} {account_id}" if account.isdigit() else f"已添加监控账号 {server} {game_name}（UID: {account_id}）"
         return await self._reply(stream_id, text)
 
@@ -534,7 +551,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if len(new_accounts) == len(accounts):
             return await self._reply(stream_id, f"未找到账号 {server} {account_id}")
         binding["accounts"] = new_accounts
-        self._save_state()
+        self._save_bindings()
         return await self._reply(stream_id, f"已移除账号 {server} {account_id}")
 
     @Command("wows_list", pattern=r"^/wows\s+list$")
@@ -632,7 +649,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         else:
             acc["nickname"] = ""
             text = f"已清除 {server} {account_id} 的群内播报昵称，将使用游戏ID"
-        self._save_state()
+        self._save_bindings()
         return await self._reply(stream_id, text)
 
     @Command("wows_mode", pattern=r"^/wows\s+mode\s+(?P<mode>[123])$")
@@ -648,7 +665,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if not binding:
             return await self._reply(stream_id, "本群尚未开启，请先 /wows on")
         binding["display_mode"] = mode
-        self._save_state()
+        self._save_bindings()
         desc = {
             1: "只播报单野/排位，不显示类型标签",
             2: "播报单野/双排/三排/排位，显示具体类型",
@@ -673,7 +690,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return await self._reply(stream_id, "本群尚未开启，请先 /wows on")
         binding["damage_low"] = low
         binding["damage_high"] = high
-        self._save_state()
+        self._save_bindings()
         if low == 0 and high == 0:
             text = "已清除伤害范围过滤，所有伤害均播报"
         else:
@@ -707,7 +724,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         extra = binding.setdefault("extra", default_extra())
         for it in items:
             extra[it] = action == "on"
-        self._save_state()
+        self._save_bindings()
         labels = [EXTRA_ITEMS[it] for it in items]
         return await self._reply(stream_id, f"已{'开启' if action == 'on' else '关闭'}额外播报：{'、'.join(labels)}")
 
@@ -780,7 +797,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         board = leaderboard.BOARDS[board_key]
         kd = get_king_data(self._state, stream_id)
         kd["enabled"][board_key] = value
-        self._save_state()
+        self._save_leaderboard()
         return await self._reply(stream_id, f"已{'开启' if value else '关闭'}本群{board['title_cn']}榜")
 
     # ---------- 中文命令别名 ----------

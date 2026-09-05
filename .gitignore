@@ -5,6 +5,7 @@ __pycache__/
 
 data.json
 battle.json
+data/
 *.tmp
 assets/images/*
 !assets/images/.gitkeep

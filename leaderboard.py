@@ -378,12 +378,12 @@ async def check_daily_reset(state, ctx, send_image_fn, logger,
 
 # ---------- HTML 生成（窝窝king / 窝批） ----------
 
-def _king_top3_rows(ranked, monthly=False) -> str:
+def _king_top3_rows(ranked, is_monthly=False) -> str:
     rows = ""
     for acc in ranked[:3]:
         r = acc["rank"]
         crown = '<span class="crown">♛</span>' if r == 1 else ""
-        if monthly:
+        if is_monthly:
             stats = f"前三{acc.get('top3_count', 0)}次 · 冠:{acc.get('champion', 0)} 亚:{acc.get('runner_up', 0)} 季:{acc.get('third', 0)} · 最佳{acc.get('best_damage', 0):,}"
         else:
             win = "胜" if acc.get("best_win") else "负"
@@ -395,10 +395,10 @@ def _king_top3_rows(ranked, monthly=False) -> str:
     return rows
 
 
-def _king_rest_rows(ranked, monthly=False) -> str:
+def _king_rest_rows(ranked, is_monthly=False) -> str:
     rows = ""
     for acc in ranked[3:10]:
-        if monthly:
+        if is_monthly:
             stats = f"前三{acc.get('top3_count', 0)}次 · 冠:{acc.get('champion', 0)} 亚:{acc.get('runner_up', 0)} 季:{acc.get('third', 0)} · 最佳{acc.get('best_damage', 0):,}"
         else:
             win = "胜" if acc.get("best_win") else "负"
