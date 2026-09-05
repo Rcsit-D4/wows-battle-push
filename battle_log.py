@@ -55,6 +55,15 @@ class BattleLogStore:
     def get_by_date(self, date_str: str) -> list[dict]:
         return self._data.get("logs", {}).get(date_str, [])
 
+    def get_by_date_range(self, start_date: str, end_date: str) -> list[dict]:
+        """返回日期区间 [start, end] 内的全部记录（含首尾），按日期升序"""
+        logs = self._data.get("logs", {})
+        result: list[dict] = []
+        for date_key in sorted(logs.keys()):
+            if start_date <= date_key <= end_date:
+                result.extend(logs[date_key])
+        return result
+
     def cleanup_old(self, retention_days: int = 30) -> int:
         """清理保留期前的日志，返回删除的记录数"""
         logs = self._data.get("logs", {})

@@ -19,6 +19,9 @@ HELP_TEXT = (
     "/wows check (/检查) - 立即检查推送\n"
     "/wows lbhelp (/排行榜帮助) - 排行榜命令\n"
     "\n"
+    "【自然语言查询(beta)】\n"
+    "群内 @bot 用自然语言提问战绩，如“小仓空今天最高伤害是多少”\n"
+    "\n"
     "管理员命令请使用 /wows adminhelp (/管理员帮助)\n"
     "\n"
     "【服务器】\n"
@@ -56,6 +59,8 @@ def _admin_help_text() -> str:
         "/wows mode <1|2|3> (/模式) - 对局类型显示模式",
         "/wows range <低> <高> (/伤害范围) - 伤害播报范围",
         "/wows extra <项> <on|off> (/额外播报) - 开关额外播报", "",
+        "【自然语言查询(beta)】",
+        "/wows nl <on|off> (/开启自然语言查询 /关闭自然语言查询) - 开关自然语言查询", "",
         "【排行榜开关】",
     ]
     lines.extend(_board_toggle_text())
@@ -98,7 +103,7 @@ def build_admin_help_html() -> str:
     )
 
 
-def build_status_html(binding: dict | None, board_enabled: dict[str, bool]) -> str:
+def build_status_html(binding: dict | None, board_enabled: dict[str, bool], nl_enabled: bool = True) -> str:
     """推送配置状态卡片 HTML；排行榜开关区遍历注册表自动生成"""
     tpl = read_template("status_page.html")
     if not binding:
@@ -130,6 +135,7 @@ def build_status_html(binding: dict | None, board_enabled: dict[str, bool]) -> s
 <div class="panel">
 <div class="section-title">运行状态</div>
 <div class="row"><span class="row-label">推送服务</span><span class="row-value">{tag(not paused)}</span></div>
+<div class="row"><span class="row-label">自然语言查询(beta)</span><span class="row-value">{tag(nl_enabled)}</span></div>
 {board_rows}
 <div class="row"><span class="row-label">监控账号</span><span class="row-value">{len(accounts)} 个</span></div>
 </div>

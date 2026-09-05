@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # 确保插件目录在 sys.path 中，使同目录模块可导入
@@ -26,7 +27,8 @@ import asyncio
 import time
 from typing import Any
 
-from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF, Command, MaiBotPlugin
+from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF, Command, MaiBotPlugin, Tool
+from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 from api import WowsApi
 from battle_log import BattleLogStore, extract_log_fields
@@ -39,6 +41,12 @@ from constants import (
     VALID_BATTLE_TYPES,
     normalize_server,
 )
+from nl_query import (
+    DEFAULT_ENABLED as NL_DEFAULT_ENABLED,
+    TOOL_DESCRIPTION as NL_TOOL_DESCRIPTION,
+    run_query,
+)
+from ship_db import ShipDb
 from state_store import StateStore
 from cards import (
     HELP_TEXT,
@@ -88,6 +96,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._stopped = False
         self._ship_map: dict[int, str] = {}
         self._ship_map_ts: float = 0.0
+        self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
 
     # ---------- 权限 ----------
     def _get_sender_id(self, kwargs: dict[str, Any]) -> str:
@@ -204,6 +213,93 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         if scope == CONFIG_RELOAD_SCOPE_SELF:
             self.ctx.logger.info("配置已更新: version=%s", version)
+
+    # ---------- 自然语言查询 ----------
+
+    @Tool(
+        "wows_query",
+        brief_description="查询战舰世界战绩统计（本群绑定玩家）",
+        detailed_description=NL_TOOL_DESCRIPTION,
+        parameters=[
+            ToolParameterInfo(
+                name="player", param_type=ToolParamType.STRING,
+                description="玩家群昵称或游戏ID（如'小仓空'），不填表示统计本群全部绑定玩家",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="date", param_type=ToolParamType.STRING,
+                description="日期或时间段：今天/昨天/这个星期/上周/这个月/上月/最近N天/YYYY-MM-DD，不填默认今天",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="ship_type", param_type=ToolParamType.STRING,
+                description="舰种中文名：航母/战列舰/巡洋舰/驱逐舰/潜艇（俗称'小人'），不填表示全部",
+                required=False,
+            ),
+            ToolParameterInfo(
+                name="metric", param_type=ToolParamType.STRING,
+                description="统计指标：最高伤害/最高击杀/场均伤害/场次/胜场/玩家列表",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_wows_query(self, player: str = "", date: str = "", ship_type: str = "", metric: str = "", **kwargs: Any):
+        """自然语言战绩查询：读本群战斗日志，按玩家/舰种/指标汇总。"""
+        stream_id = kwargs.get("stream_id", "")
+        binding = self._get_binding(stream_id)
+        if not binding or not binding.get("accounts"):
+            return {"success": False, "content": "当前群尚未绑定任何账号，无法查询。"}
+        if not binding.get("nl_enabled", NL_DEFAULT_ENABLED):
+            return {"success": False, "content": "本群已关闭自然语言查询，管理员可用 /开启自然语言查询 开启。"}
+        try:
+            start, end = self._parse_date_range(date)
+            if not self._ship_db.loaded:
+                try:
+                    await self._ship_db.refresh(self._api)
+                except Exception:  # noqa: BLE001
+                    self.ctx.logger.warning("舰种库刷新失败，舰种过滤可能不完整")
+            records = self._battle_log.get_by_date_range(start, end) if self._battle_log else []
+            result = run_query(
+                records, self._ship_db, binding.get("accounts", []),
+                player=player, ship_type=ship_type, metric=metric,
+            )
+            return {"success": True, "content": result}
+        except Exception:  # noqa: BLE001
+            self.ctx.logger.exception("自然语言查询失败")
+            return {"success": False, "content": "查询失败，请稍后再试。"}
+
+    @staticmethod
+    def _parse_date_range(date_text: str) -> tuple[str, str]:
+        """把日期说法解析为 (起始日期, 结束日期) %Y-%m-%d；单日则 start==end"""
+        today = date.today()
+        t = (date_text or "").strip()
+        if not t or t in ("今天", "今日"):
+            return today.isoformat(), today.isoformat()
+        if t in ("昨天", "昨日"):
+            d = today - timedelta(days=1)
+            return d.isoformat(), d.isoformat()
+        if t in ("这个星期", "本周", "这周"):
+            start = today - timedelta(days=today.weekday())  # 本周一
+            return start.isoformat(), today.isoformat()
+        if t in ("上星期", "上周"):
+            this_monday = today - timedelta(days=today.weekday())
+            last_sunday = this_monday - timedelta(days=1)
+            last_monday = this_monday - timedelta(days=7)
+            return last_monday.isoformat(), last_sunday.isoformat()
+        if t in ("这个月", "本月"):
+            return today.replace(day=1).isoformat(), today.isoformat()
+        if t in ("上个月", "上月"):
+            last_month_end = today.replace(day=1) - timedelta(days=1)
+            return last_month_end.replace(day=1).isoformat(), last_month_end.isoformat()
+        m = __import__("re").fullmatch(r"最近(\d+)天", t)
+        if m:
+            n = int(m.group(1))
+            return (today - timedelta(days=n - 1)).isoformat(), today.isoformat()
+        m = __import__("re").fullmatch(r"(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})", t)
+        if m:
+            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return d.isoformat(), d.isoformat()
+        return today.isoformat(), today.isoformat()
 
     # ---------- 状态存取 ----------
     def _load_state(self) -> None:
@@ -591,13 +687,18 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         board_text = " ".join(f"{leaderboard.BOARDS[key]['title_cn']}={'开' if v else '关'}" for key, v in board_enabled.items())
         fallback = (
             f"推送状态：{'暂停' if binding.get('paused') else '运行中'}\n"
+            f"自然语言查询：{'开启' if binding.get('nl_enabled', NL_DEFAULT_ENABLED) else '关闭'}\n"
             f"榜单开关：{board_text}\n"
             f"显示模式：{mode}（{mode_text}）\n"
             f"伤害范围：≤{dmg_low} 或 ≥{dmg_high}\n"
             f"额外播报：{extra_text}\n"
             f"监控账号：{len(binding.get('accounts', []))} 个"
         )
-        return await self._reply_image(stream_id, build_status_html(binding, board_enabled), fallback)
+        return await self._reply_image(
+            stream_id,
+            build_status_html(binding, board_enabled, bool(binding.get("nl_enabled", NL_DEFAULT_ENABLED))),
+            fallback,
+        )
 
     @Command("wows_check", pattern=r"^/wows\s+check$")
     async def cmd_check(self, **kwargs):
@@ -727,6 +828,34 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._save_bindings()
         labels = [EXTRA_ITEMS[it] for it in items]
         return await self._reply(stream_id, f"已{'开启' if action == 'on' else '关闭'}额外播报：{'、'.join(labels)}")
+
+    async def _cmd_nl_toggle(self, stream_id: str, value: bool) -> tuple[bool, str, int]:
+        binding = self._get_binding(stream_id)
+        if not binding:
+            return await self._reply(stream_id, "本群尚未开启，请先 /wows on")
+        binding["nl_enabled"] = value
+        self._save_bindings()
+        return await self._reply(stream_id, f"已{'开启' if value else '关闭'}自然语言查询(beta)")
+
+    @Command("wows_nl", pattern=r"^/wows\s+nl\s+(?P<action>on|off)$")
+    async def cmd_nl(self, **kwargs):
+        if not await self._check_permission("wows_nl", kwargs):
+            return await self._denied()
+        groups = kwargs.get("matched_groups") or {}
+        value = (groups.get("action") or "").lower() == "on"
+        return await self._cmd_nl_toggle(kwargs["stream_id"], value)
+
+    @Command("cn_nl_on", pattern=r"^/开启自然语言查询$")
+    async def cn_nl_on(self, **kwargs):
+        if not await self._check_permission("cn_nl_on", kwargs):
+            return await self._denied()
+        return await self._cmd_nl_toggle(kwargs["stream_id"], True)
+
+    @Command("cn_nl_off", pattern=r"^/关闭自然语言查询$")
+    async def cn_nl_off(self, **kwargs):
+        if not await self._check_permission("cn_nl_off", kwargs):
+            return await self._denied()
+        return await self._cmd_nl_toggle(kwargs["stream_id"], False)
 
     # ---------- 榜单命令（由注册表动态注册，此处提供通用分发） ----------
 

@@ -85,6 +85,23 @@ class WowsApi:
             out[int(sid)] = name
         return out
 
+    async def fetch_ship_catalog(self) -> dict[str, dict]:
+        """拉取图鉴全量：{str(shipId): {name, type, tier}}，type 为英文舰种代码"""
+        data = self._parse_json(
+            await self._get_async(ENCYCLOPEDIA_URL, ENCYCLOPEDIA_HEADERS), ENCYCLOPEDIA_URL
+        )
+        out: dict[str, dict] = {}
+        for it in data.get("data") or []:
+            sid = it.get("shipId")
+            if sid is None:
+                continue
+            out[str(sid)] = {
+                "name": it.get("nameCn") or it.get("nameEnglish") or it.get("name") or f"Ship{sid}",
+                "type": it.get("shipType") or "",
+                "tier": it.get("level") or 0,
+            }
+        return out
+
     async def search_player(self, server: str, nickname: str) -> tuple[int, str] | None:
         """通过昵称搜索玩家，返回 (account_id, name)，未找到返回 None"""
         server_upper = server.upper()

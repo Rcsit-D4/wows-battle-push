@@ -49,6 +49,10 @@
 | `/wows wopi <日期>` / `/查看历史窝批 <日期>` | — | 查看某日窝批榜 |
 | `/wows wopi month` / `/本月窝批` | — | 查看本月窝批榜 |
 
+### 自然语言查询（beta）
+
+群内 `@bot` 用自然语言提问战绩，如"小仓空今天最高伤害是多少""娜娜米这个星期玩了多少把航母"。管理员用 `/wows nl on|off`（`/开启自然语言查询` `/关闭自然语言查询`）控制开关。
+
 ### 管理员命令（仅 `admin_qq` 白名单）
 
 | 命令 | 中文 | 说明 |
@@ -89,6 +93,8 @@ wows-battle-push/
 ├── stats.py         统计快照、差值检测、播报格式化
 ├── cards.py         help/status/list 图片卡片生成（榜单开关区自动生成）
 ├── battle_log.py    战斗日志存储与查询
+├── nl_query.py      自然语言查询引擎（@bot 提问战绩）
+├── ship_db.py       舰种图鉴本地缓存
 ├── utils.py         模板读取、背景图、图片渲染发送
 ├── config.toml      插件配置
 ├── _manifest.json   插件清单
