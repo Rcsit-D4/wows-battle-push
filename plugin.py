@@ -223,7 +223,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         parameters=[
             ToolParameterInfo(
                 name="player", param_type=ToolParamType.STRING,
-                description="玩家群昵称或游戏ID（如'小仓空'），不填表示统计本群全部绑定玩家",
+                description="玩家群昵称或游戏ID（如'XXX'），不填表示统计本群全部绑定玩家",
                 required=False,
             ),
             ToolParameterInfo(

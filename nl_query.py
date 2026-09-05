@@ -11,10 +11,10 @@ DEFAULT_ENABLED = True
 # Tool 描述：供 LLM 判断何时调用，并约束回复行为（防止回复后发散）
 TOOL_DESCRIPTION = (
     "当用户用自然语言询问《战舰世界》战绩数据时调用，例如："
-    "'小仓空今天最高伤害是多少'、'娜娜米这个星期玩了多少把航母'、'今天群里谁玩了潜艇'、"
+    "'XXX今天最高伤害是多少'、'XXX这个星期玩了多少把航母'、'今天群里谁玩了潜艇'、"
     "'这个月谁赢了最多'等。会查询本群绑定玩家的战斗日志并返回统计结果。"
     "注意：只有群内明确询问战绩/伤害/场次/舰种/胜负等数据时才调用；无关闲聊不要调用。"
-    "player 可用群昵称或游戏ID（如'小仓空'），不填表示统计本群全部绑定玩家；"
+    "player 可用群昵称或游戏ID（如'XXX'），不填表示统计本群全部绑定玩家；"
     "date 支持'今天/昨天/这个星期/上周/这个月/上月/最近N天/YYYY-MM-DD'，不填默认今天；"
     "ship_type 为舰种中文名（航母/战列舰/巡洋舰/驱逐舰/潜艇，潜艇俗称'小人'）；"
     "metric 必填：最高伤害/最高击杀/场均伤害/场次/胜场/玩家列表。"
@@ -75,7 +75,7 @@ def _match_account(records: list[dict], player_query: str, group_accounts: list[
     # 数字直接当 account_id
     if q.isdigit():
         return [a for a in group_accounts if str(a.get("account_id")) == q]
-    # 群昵称包含匹配（"小仓空" -> "小仓空大人"）
+    # 群昵称包含匹配（输入短昵称匹配群内完整昵称）
     hits = [a for a in group_accounts if q in (a.get("nickname") or "")]
     if hits:
         return hits
