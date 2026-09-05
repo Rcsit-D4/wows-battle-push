@@ -753,6 +753,10 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return await self._reply(stream_id, "日期格式错误，如 /wows king 20260831")
         kd = get_king_data(self._state, stream_id)
         ranked = get_history(kd, board_key, date_iso)
+        if not ranked and self._battle_log:
+            # 兜底检查器：history 无该日固定榜时，从战斗日志实时计算
+            day_records = self._battle_log.get_by_date(date_iso)
+            ranked = board["rank_fn"](day_records, self._monitored_keys(stream_id), self._get_group_nickname, stream_id)
         if not ranked:
             return await self._reply(stream_id, f"{date_iso} 暂无{board['title_cn']}榜数据")
         self._refresh_ranked_nicknames(stream_id, ranked)
