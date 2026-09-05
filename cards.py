@@ -13,7 +13,7 @@ HELP_TEXT = (
     "【常用命令】\n"
     "/wows help (/帮助) - 帮助\n"
     "/wows adminhelp (/管理员帮助) - 管理员命令\n"
-    "/wows add <服务器> <ID> (/添加) - 添加播报账号\n"
+    "/wows add <服务器> <ID> [me] (/添加) - 添加播报账号（末尾加 me 绑定本人QQ）\n"
     "/wows remove <服务器> <ID> (/移除) - 移除播报账号\n"
     "/wows list (/列表) - 查看监控列表\n"
     "/wows check (/检查) - 立即检查推送\n"

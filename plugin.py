@@ -596,12 +596,14 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     async def cmd_pause(self, **kwargs):
         return await self.cmd_off(**kwargs)
 
-    @Command("wows_add", pattern=r"^/wows\s+add\s+(?P<server>\S+)\s+(?P<account>\S+)$")
+    @Command("wows_add", pattern=r"^/wows\s+add\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<me>me))?$")
     async def cmd_add(self, **kwargs):
         stream_id = kwargs["stream_id"]
         groups = kwargs.get("matched_groups") or {}
         server = normalize_server(groups.get("server", ""))
         account = groups.get("account", "").strip()
+        me = bool(groups.get("me"))
+        qq = self._get_sender_id(kwargs) if me else ""
 
         if server not in SERVER_VORTEX:
             return await self._reply(stream_id, f"服务器参数无效：{server}（可用 CN/ASIA/EU/NA/RU 或 国服/亚服/欧服/美服/俄服）")
@@ -621,14 +623,35 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         binding = self._get_binding(stream_id)
         if binding is None:
             return await self._reply(stream_id, "请先由管理员发送 /wows on 开启功能，再添加账号")
+
+        # 添加监控账号（已存在则跳过）
         accounts = binding.setdefault("accounts", [])
-        for acc in accounts:
-            if str(acc.get("server", "")).upper() == server and int(acc.get("account_id", 0)) == account_id:
-                return await self._reply(stream_id, f"账号 {server} {account_id} 已在监控列表中")
-        accounts.append({"server": server, "account_id": account_id, "nickname": ""})
+        exists = any(
+            str(a.get("server", "")).upper() == server and int(a.get("account_id", 0)) == account_id
+            for a in accounts
+        )
+        if not exists:
+            accounts.append({"server": server, "account_id": account_id, "nickname": ""})
+
+        # me 绑定：把发送者 QQ 绑定到该 UID；已绑定过则替换为新 UID
+        bind_msg = ""
+        if me:
+            if not qq:
+                return await self._reply(stream_id, "无法获取发送者QQ，无法绑定")
+            qb = binding.setdefault("qq_bindings", {})
+            old = qb.get(qq)
+            qb[qq] = {"server": server, "account_id": account_id}
+            if old and (str(old.get("server", "")).upper() != server or int(old.get("account_id", 0)) != account_id):
+                bind_msg = f"，已将你的QQ从 {old.get('server', '')} {old.get('account_id', '')} 替换绑定到 {server} {account_id}"
+            else:
+                bind_msg = f"，已将你的QQ绑定到 {server} {account_id}"
+
         self._save_bindings()
-        text = f"已添加监控账号 {server} {account_id}" if account.isdigit() else f"已添加监控账号 {server} {game_name}（UID: {account_id}）"
-        return await self._reply(stream_id, text)
+        if not exists:
+            text = f"已添加监控账号 {server} {account_id}" if account.isdigit() else f"已添加监控账号 {server} {game_name}（UID: {account_id}）"
+        else:
+            text = f"账号 {server} {account_id} 已在监控列表中"
+        return await self._reply(stream_id, text + bind_msg)
 
     @Command("wows_remove", pattern=r"^/wows\s+remove\s+(?P<server>\S+)\s+(?P<account_id>\d+)$")
     async def cmd_remove(self, **kwargs):
@@ -936,7 +959,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     @Command("cn_admin_help", pattern=r"^/管理员帮助$")
     async def cn_admin_help(self, **kwargs): return await self.cmd_admin_help(**kwargs)
 
-    @Command("cn_add", pattern=r"^/添加\s+(?P<server>\S+)\s+(?P<account>\S+)$")
+    @Command("cn_add", pattern=r"^/添加\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<me>me))?$")
     async def cn_add(self, **kwargs): return await self.cmd_add(**kwargs)
 
     @Command("cn_remove", pattern=r"^/移除\s+(?P<server>\S+)\s+(?P<account_id>\d+)$")
