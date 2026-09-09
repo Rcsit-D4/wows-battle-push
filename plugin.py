@@ -763,22 +763,29 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if not has_new:
             return await self._reply(stream_id, "检查完成：当前无新对局")
 
-    @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account_id>\d+)(?:\s+(?P<nickname>.+))?$")
+    @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<nickname>.+))?$")
     async def cmd_nick(self, **kwargs):
         if not await self._check_permission("wows_nick", kwargs):
             return await self._denied()
         stream_id = kwargs["stream_id"]
         groups = kwargs.get("matched_groups") or {}
         server = normalize_server(groups.get("server", ""))
-        try:
-            account_id = int(groups.get("account_id", "0"))
-        except ValueError:
-            account_id = 0
+        account = groups.get("account", "").strip()
         nickname = (groups.get("nickname") or "").strip()
         if len(nickname) > 16:
             return await self._reply(stream_id, "昵称限制16字符")
         if server not in SERVER_VORTEX:
             return await self._reply(stream_id, f"服务器参数无效：{server}（可用 {', '.join(SERVER_VORTEX)}）")
+
+        # 数字直接当 UID，非数字调用昵称搜索
+        if account.isdigit():
+            account_id = int(account)
+        else:
+            result = await self._api.search_player(server, account)
+            if result is None:
+                return await self._reply(stream_id, f"未找到玩家：{account}（请检查昵称和服务器）")
+            account_id, _ = result
+
         if account_id <= 0:
             return await self._reply(stream_id, "账号ID格式错误")
         acc = self._find_account(stream_id, server, account_id)
@@ -994,7 +1001,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     @Command("cn_off", pattern=r"^/暂停$")
     async def cn_off(self, **kwargs): return await self.cmd_off(**kwargs)
 
-    @Command("cn_nick", pattern=r"^/昵称\s+(?P<server>\S+)\s+(?P<account_id>\d+)(?:\s+(?P<nickname>.+))?$")
+    @Command("cn_nick", pattern=r"^/昵称\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<nickname>.+))?$")
     async def cn_nick(self, **kwargs): return await self.cmd_nick(**kwargs)
 
     @Command("cn_mode", pattern=r"^/模式\s+(?P<mode>[123])$")
