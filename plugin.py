@@ -653,12 +653,28 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             text = f"账号 {server} {account_id} 已在监控列表中"
         return await self._reply(stream_id, text + bind_msg)
 
-    @Command("wows_remove", pattern=r"^/wows\s+remove\s+(?P<server>\S+)\s+(?P<account_id>\d+)$")
+    @Command("wows_remove", pattern=r"^/wows\s+remove\s+(?P<server>\S+)\s+(?P<account>\S+)$")
     async def cmd_remove(self, **kwargs):
         stream_id = kwargs["stream_id"]
         groups = kwargs.get("matched_groups") or {}
         server = normalize_server(groups.get("server", ""))
-        account_id = int(groups.get("account_id", "0") or 0)
+        account = groups.get("account", "").strip()
+
+        if server not in SERVER_VORTEX:
+            return await self._reply(stream_id, f"服务器参数无效：{server}（可用 CN/ASIA/EU/NA/RU 或 国服/亚服/欧服/美服/俄服）")
+
+        # 数字直接当 UID，非数字调用昵称搜索
+        if account.isdigit():
+            account_id = int(account)
+        else:
+            result = await self._api.search_player(server, account)
+            if result is None:
+                return await self._reply(stream_id, f"未找到玩家：{account}（请检查昵称和服务器）")
+            account_id, _ = result
+
+        if account_id <= 0:
+            return await self._reply(stream_id, "账号ID格式错误")
+
         binding = self._get_binding(stream_id)
         if not binding:
             return await self._reply(stream_id, "尚未绑定，无需移除")
@@ -962,7 +978,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     @Command("cn_add", pattern=r"^/添加\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<me>me))?$")
     async def cn_add(self, **kwargs): return await self.cmd_add(**kwargs)
 
-    @Command("cn_remove", pattern=r"^/移除\s+(?P<server>\S+)\s+(?P<account_id>\d+)$")
+    @Command("cn_remove", pattern=r"^/移除\s+(?P<server>\S+)\s+(?P<account>\S+)$")
     async def cn_remove(self, **kwargs): return await self.cmd_remove(**kwargs)
 
     @Command("cn_list", pattern=r"^/列表$")
