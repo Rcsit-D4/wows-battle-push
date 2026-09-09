@@ -262,6 +262,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             result = run_query(
                 records, self._ship_db, binding.get("accounts", []),
                 player=player, ship_type=ship_type, metric=metric,
+                scope=(date or "今天"),
             )
             return {"success": True, "content": result}
         except Exception:  # noqa: BLE001

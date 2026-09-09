@@ -22,6 +22,9 @@ TOOL_DESCRIPTION = (
     "metric 必填：最高伤害/最高击杀/场均伤害/场次/胜场/玩家列表。"
     "回复规范（必须严格遵守）："
     "只汇报工具返回的数据，数字、船名、场次、舰种、昵称等必须逐字照抄，严禁改动、添加、猜测或联想；"
+    "必须完整转述工具返回的全部内容：每个玩家、每个数字、每一行都不得省略、截断、合并或用'等/...'代替，"
+    "排行/列表类结果必须列出全部条目，不得只报前几名或挑着说；"
+    "回复开头必须保留工具返回的第一行【查询范围】，让听者明确统计的是哪个玩家、什么时间、什么舰种、什么指标；"
     "工具未返回的信息（如某艘船属于什么舰种）禁止自行补充说明，更不得把舰种张冠李戴；"
     "若工具返回'没有找到/没有记录'，如实转述即可，不要编造数据；"
     "即使角色爱整活，涉及战绩数据时也只可在措辞和语气上发挥，严禁改动数据内容；"
@@ -133,12 +136,29 @@ def run_query(
     player: str = "",
     ship_type: str = "",
     metric: str = "场次",
+    scope: str = "",
 ) -> str:
     """执行一次自然语言查询，返回结构化文本供 LLM 组织回复。
 
     records: 某日期区间的全部 battle 记录（单局一条）
     group_accounts: 当前群绑定的账号列表
+    scope: 查询范围描述（如'今天'/'这个星期'），有值时在结果首行输出【scope】
     """
+    body = _run_query_impl(records, ship_db, group_accounts, player, ship_type, metric)
+    if scope and body and not body.startswith("没有"):
+        return f"【{scope}】\n{body}"
+    return body
+
+
+def _run_query_impl(
+    records: list[dict],
+    ship_db: ShipDb,
+    group_accounts: list[dict],
+    player: str = "",
+    ship_type: str = "",
+    metric: str = "场次",
+) -> str:
+    """查询主体：返回结果文本（不含范围头）"""
     if not records:
         return "该条件下没有找到任何战斗记录。"
     st = normalize_ship_type(ship_type, ship_db)
