@@ -390,7 +390,7 @@ def _king_top3_rows(ranked, is_monthly=False) -> str:
             stats = f"伤害{acc.get('best_damage', 0):,} · 击杀{acc.get('best_kills', 0)} · 经验{acc.get('best_xp', 0):,} · 潜在{acc.get('best_potential', 0):,} · 点亮{acc.get('best_scouting', 0):,} · {win}"
         rows += f"""<div class="top3-row rank-{r}">
 <div class="rank-badge">{r}</div>
-<div class="top3-info"><div class="top3-name">{_display_name(acc, show_ship=True)}{crown}</div>
+<div class="top3-info"><div class="top3-name">{escape(_display_name(acc, show_ship=True))}{crown}</div>
 <div class="top3-stats">{stats}</div></div></div>"""
     return rows
 
@@ -405,7 +405,7 @@ def _king_rest_rows(ranked, is_monthly=False) -> str:
             stats = f"伤害{acc.get('best_damage', 0):,} · {win} · {acc.get('best_kills', 0)}击杀"
         rows += f"""<div class="normal-row">
 <span class="normal-rank">{acc['rank']}</span>
-<span class="normal-name">{_display_name(acc, show_ship=True)}</span>
+<span class="normal-name">{escape(_display_name(acc, show_ship=True))}</span>
 <span class="normal-stats">{stats}</span></div>"""
     return rows
 
@@ -417,7 +417,7 @@ def _wopi_top3_rows(ranked) -> str:
         crown = '<span class="crown">♛</span>' if r == 1 else ""
         rows += f"""<div class="top3-row rank-{r}">
 <div class="rank-badge">{r}</div>
-<div class="top3-info"><div class="top3-name">{_display_name(acc)}{crown}</div></div>
+<div class="top3-info"><div class="top3-name">{escape(_display_name(acc))}{crown}</div></div>
 <div class="wopi-battles">{acc.get('battles', 0)}场</div></div>"""
     return rows
 
@@ -427,17 +427,17 @@ def _wopi_rest_rows(ranked) -> str:
     for acc in ranked[3:10]:
         rows += f"""<div class="normal-row">
 <span class="normal-rank">{acc['rank']}</span>
-<span class="normal-name">{_display_name(acc)}</span>
+<span class="normal-name">{escape(_display_name(acc))}</span>
 <span class="wopi-battles-small">{acc.get('battles', 0)}场</span></div>"""
     return rows
 
 
 def _bottom_panel(title, name, sub, date) -> str:
     return f"""<div class="panel yesterday-king">
-<div class="yesterday-title">{title}</div>
-<div class="yesterday-name">{name}</div>
-<div class="yesterday-damage">{sub}</div>
-<div class="yesterday-date">{date}</div></div>"""
+<div class="yesterday-title">{escape(title)}</div>
+<div class="yesterday-name">{escape(name)}</div>
+<div class="yesterday-damage">{escape(sub)}</div>
+<div class="yesterday-date">{escape(date)}</div></div>"""
 
 
 def build_king_html(ranked, date_str, last=None, period=PERIOD_DAILY) -> str:

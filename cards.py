@@ -155,8 +155,8 @@ def _render_list_rows(accounts: list, snapshots: dict) -> str:
         server = str(acc.get("server", "")).upper()
         aid = acc.get("account_id", 0)
         snap_key = f"{server}:{aid}"
-        game_name = snapshots.get(snap_key, {}).get("name") or "未拉取"
-        nick = acc.get("nickname") or "无"
+        game_name = escape(snapshots.get(snap_key, {}).get("name") or "未拉取")
+        nick = escape(acc.get("nickname") or "无")
         rows += f"""<div class="list-row">
 <span class="col-server">{server}</span>
 <span class="col-uid">{aid}</span>
