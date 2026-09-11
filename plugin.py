@@ -481,8 +481,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         extra = self._get_extra(stream_id)
                         display_name = self._get_display_name(stream_id, server, account_id, name)
                         text = format_battle(display_name, ship_name, d, bt, display_mode, extra)
-                        if extra.get("record") and ship_id in old:
-                            broken = check_career_records(old[ship_id], new_snap[ship_id])
+                        if extra.get("record"):
+                            broken = check_career_records(old.get(ship_id) or {}, new_snap.get(ship_id) or {})
                             if broken:
                                 text = text + "\n" + format_record_break(broken)
                         await self._push_to_stream(text, stream_id)
@@ -494,37 +494,32 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self._save_snapshots()
         return results
 
-    async def _refresh_account_snapshot(self, server: str, account_id: int, save: bool = True) -> None:
-        """静默建立单账号快照基线（绑定/恢复时使用，跳过历史战绩）"""
-        if account_id <= 0:
-            return
-        await self._ensure_ship_db()
-        snap_key = f"{server.upper()}:{account_id}"
-        new_types: dict[str, dict[int, dict[str, int]]] = {}
-        name = f"Account{account_id}"
-        for bt in self._enabled_types():
-            try:
-                name, stats = await self._api.fetch_user_ships(server, account_id, bt)
-                snap = summarize(stats)
-                if snap:
-                    new_types[bt] = snap
-            except Exception:  # noqa: BLE001
-                self.ctx.logger.warning("建立快照基线失败 %s:%s %s", server, account_id, bt)
-        if new_types:
-            self._state["snapshots"][snap_key] = {"name": name, "battle_types": new_types, "updated": time.time()}
-            if save:
-                self._save_snapshots()
-
     async def _refresh_snapshots_for_stream(self, stream_id: str) -> None:
         """静默刷新该群所有账号的快照（暂停恢复时跳过历史战绩）"""
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
             return
+        await self._ensure_ship_db()
+        enabled_types = self._enabled_types()
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
             account_id = int(acc.get("account_id", 0))
-            if account_id > 0:
-                await self._refresh_account_snapshot(server, account_id, save=False)
+            if account_id <= 0:
+                continue
+            snap_key = f"{server}:{account_id}"
+            new_types: dict[str, dict[int, dict[str, int]]] = {}
+            name = self._state.get("snapshots", {}).get(snap_key, {}).get("name") or f"Account{account_id}"
+            for bt in enabled_types:
+                try:
+                    name, stats = await self._api.fetch_user_ships(server, account_id, bt)
+                    new_types[bt] = summarize(stats)
+                except Exception:  # noqa: BLE001
+                    self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
+                    continue
+            if new_types:
+                self._state["snapshots"][snap_key] = {
+                    "name": name, "battle_types": new_types, "updated": time.time()
+                }
         self._save_snapshots()
 
     async def _push_to_stream(self, text: str, stream_id: str) -> None:
@@ -656,8 +651,6 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
         self._save_bindings()
         if not exists:
-            # 立即静默建立基线，避免首次轮询把历史战绩当新对局刷屏
-            await self._refresh_account_snapshot(server, account_id)
             text = f"已添加监控账号 {server} {account_id}" if account.isdigit() else f"已添加监控账号 {server} {game_name}（UID: {account_id}）"
         else:
             text = f"账号 {server} {account_id} 已在监控列表中"
