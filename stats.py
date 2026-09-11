@@ -49,12 +49,14 @@ def detect_new_battles(
     new: dict[int, dict[str, int]],
     max_battles: int = 5,
 ) -> dict[int, dict[str, int]]:
-    """对比新旧快照，返回有新增对局的船及其差值。旧快照不存在的船或单船超过 max_battles 局不播报。"""
+    """对比新旧快照，返回有新增对局的船及其差值。
+
+    旧快照不存在的船视为新增（差值取新快照当前值，用于播报新开的船）；
+    单船新增超过 max_battles 局不播报，防止首次绑定无基线时刷历史战绩。
+    """
     result: dict[int, dict[str, int]] = {}
     for ship_id, n in new.items():
-        o = old.get(ship_id)
-        if o is None:
-            continue
+        o = old.get(ship_id) or {}
         d = {k: n.get(k, 0) - o.get(k, 0) for k in set(n) | set(o)}
         d.update(_broadcast_fields(d))
         if 0 < d.get("battles", 0) <= max_battles:
