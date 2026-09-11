@@ -50,6 +50,11 @@ class ShipDb:
         """是否有完整图鉴缓存（不含补录）；无缓存时由调用方触发 refresh"""
         return bool(self._db)
 
+    @property
+    def size(self) -> int:
+        """缓存条目数"""
+        return len(self._db)
+
     async def refresh(self, api: Any) -> int:
         """从图鉴接口拉取全量并落盘，返回拉取条数"""
         raw = await api.fetch_ship_catalog()

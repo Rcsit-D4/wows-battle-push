@@ -71,20 +71,6 @@ class WowsApi:
                 stats[int(sid)] = bt_stats
         return name, stats
 
-    async def fetch_encyclopedia(self) -> dict[int, str]:
-        """返回 {shipId: 船名}，中文名优先"""
-        data = self._parse_json(
-            await self._get_async(ENCYCLOPEDIA_URL, ENCYCLOPEDIA_HEADERS), ENCYCLOPEDIA_URL
-        )
-        out: dict[int, str] = {}
-        for it in data.get("data") or []:
-            sid = it.get("shipId")
-            if sid is None:
-                continue
-            name = it.get("nameCn") or it.get("nameEnglish") or it.get("name") or f"Ship{sid}"
-            out[int(sid)] = name
-        return out
-
     async def fetch_ship_catalog(self) -> dict[str, dict]:
         """拉取图鉴全量：{str(shipId): {name, type, tier}}，type 为英文舰种代码"""
         data = self._parse_json(

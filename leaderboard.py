@@ -33,14 +33,15 @@ def parse_date(s: str) -> str | None:
 
 
 def _display_name(acc: dict, show_ship: bool = False) -> str:
-    """群昵称(游戏ID) 或 游戏ID；show_ship=True 时追加船名"""
-    name = acc.get("name", "未知")
+    """群昵称(游戏ID) 或 游戏ID；show_ship=True 时追加船名。返回 HTML 片段，用户数据已转义"""
+    name_raw = acc.get("name", "未知") or "未知"
+    name = escape(str(name_raw))
     nick = acc.get("group_nickname")
-    html = f'{nick}<span class="game-id">({name})</span>' if nick and nick != name else name
+    html = f'{escape(nick)}<span class="game-id">({name})</span>' if nick and nick != name_raw else name
     if show_ship:
         ship = acc.get("ship_name")
         if ship and ship != "未知舰船":
-            html += f'<span class="ship-name">{ship}</span>'
+            html += f'<span class="ship-name">{escape(str(ship))}</span>'
     return html
 
 
@@ -390,7 +391,7 @@ def _king_top3_rows(ranked, is_monthly=False) -> str:
             stats = f"伤害{acc.get('best_damage', 0):,} · 击杀{acc.get('best_kills', 0)} · 经验{acc.get('best_xp', 0):,} · 潜在{acc.get('best_potential', 0):,} · 点亮{acc.get('best_scouting', 0):,} · {win}"
         rows += f"""<div class="top3-row rank-{r}">
 <div class="rank-badge">{r}</div>
-<div class="top3-info"><div class="top3-name">{escape(_display_name(acc, show_ship=True))}{crown}</div>
+<div class="top3-info"><div class="top3-name">{_display_name(acc, show_ship=True)}{crown}</div>
 <div class="top3-stats">{stats}</div></div></div>"""
     return rows
 
@@ -405,7 +406,7 @@ def _king_rest_rows(ranked, is_monthly=False) -> str:
             stats = f"伤害{acc.get('best_damage', 0):,} · {win} · {acc.get('best_kills', 0)}击杀"
         rows += f"""<div class="normal-row">
 <span class="normal-rank">{acc['rank']}</span>
-<span class="normal-name">{escape(_display_name(acc, show_ship=True))}</span>
+<span class="normal-name">{_display_name(acc, show_ship=True)}</span>
 <span class="normal-stats">{stats}</span></div>"""
     return rows
 
@@ -417,7 +418,7 @@ def _wopi_top3_rows(ranked) -> str:
         crown = '<span class="crown">♛</span>' if r == 1 else ""
         rows += f"""<div class="top3-row rank-{r}">
 <div class="rank-badge">{r}</div>
-<div class="top3-info"><div class="top3-name">{escape(_display_name(acc))}{crown}</div></div>
+<div class="top3-info"><div class="top3-name">{_display_name(acc)}{crown}</div></div>
 <div class="wopi-battles">{acc.get('battles', 0)}场</div></div>"""
     return rows
 
@@ -427,15 +428,16 @@ def _wopi_rest_rows(ranked) -> str:
     for acc in ranked[3:10]:
         rows += f"""<div class="normal-row">
 <span class="normal-rank">{acc['rank']}</span>
-<span class="normal-name">{escape(_display_name(acc))}</span>
+<span class="normal-name">{_display_name(acc)}</span>
 <span class="wopi-battles-small">{acc.get('battles', 0)}场</span></div>"""
     return rows
 
 
 def _bottom_panel(title, name, sub, date) -> str:
+    """name 为 _display_name 生成的 HTML 片段（内部已转义），其余参数为纯文本"""
     return f"""<div class="panel yesterday-king">
 <div class="yesterday-title">{escape(title)}</div>
-<div class="yesterday-name">{escape(name)}</div>
+<div class="yesterday-name">{name}</div>
 <div class="yesterday-damage">{escape(sub)}</div>
 <div class="yesterday-date">{escape(date)}</div></div>"""
 

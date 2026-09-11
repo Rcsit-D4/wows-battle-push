@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -94,9 +95,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._store: StateStore | None = None
         self._poller_task: asyncio.Task | None = None
         self._stopped = False
-        self._ship_map: dict[int, str] = {}
-        self._ship_map_ts: float = 0.0
         self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
+        self._ship_db_ts: float = 0.0
 
     # ---------- 权限 ----------
     def _get_sender_id(self, kwargs: dict[str, Any]) -> str:
@@ -292,11 +292,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if t in ("上个月", "上月"):
             last_month_end = today.replace(day=1) - timedelta(days=1)
             return last_month_end.replace(day=1).isoformat(), last_month_end.isoformat()
-        m = __import__("re").fullmatch(r"最近(\d+)天", t)
+        m = re.fullmatch(r"最近(\d+)天", t)
         if m:
             n = int(m.group(1))
             return (today - timedelta(days=n - 1)).isoformat(), today.isoformat()
-        m = __import__("re").fullmatch(r"(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})", t)
+        m = re.fullmatch(r"(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})", t)
         if m:
             d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
             return d.isoformat(), d.isoformat()
@@ -350,15 +350,16 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             self.ctx.logger.exception("保存榜单数据失败")
 
     # ---------- 轮询 ----------
-    async def _ensure_ship_map(self) -> None:
-        if time.time() - self._ship_map_ts < SHIP_MAP_REFRESH_SECONDS and self._ship_map:
+    async def _ensure_ship_db(self) -> None:
+        """确保舰种库已加载（6小时刷新一次）"""
+        if self._ship_db.loaded and time.time() - self._ship_db_ts < SHIP_MAP_REFRESH_SECONDS:
             return
         try:
-            self._ship_map = await self._api.fetch_encyclopedia()
-            self._ship_map_ts = time.time()
-            self.ctx.logger.info("战舰图鉴已刷新: %d 艘", len(self._ship_map))
+            await self._ship_db.refresh(self._api)
+            self._ship_db_ts = time.time()
+            self.ctx.logger.info("舰种库已刷新: %d 艘", self._ship_db.size)
         except Exception:  # noqa: BLE001
-            self.ctx.logger.exception("刷新战舰图鉴失败，沿用旧缓存")
+            self.ctx.logger.exception("刷新舰种库失败，沿用旧缓存")
 
     async def _poller_loop(self) -> None:
         await asyncio.sleep(5)
@@ -399,7 +400,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             get_nickname_fn=self._get_group_nickname,
         ):
             self._save_leaderboard()
-        await self._ensure_ship_map()
+        await self._ensure_ship_db()
         accounts = self._unique_accounts()
         if not accounts:
             return
@@ -434,6 +435,9 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("拉取 %s:%s %s 失败，跳过", server, account_id, bt)
                 continue
             new_snap = summarize(stats)
+            if not new_snap:
+                # API 返回空时保留旧快照，避免清空历史基线导致漏播
+                continue
             new_types[bt] = new_snap
             old = old_types.get(bt) or {}
             if not old:
@@ -451,7 +455,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         "account_id": account_id,
                         "account_name": name,
                         "ship_id": ship_id,
-                        "ship_name": self._ship_map.get(ship_id, f"Ship{ship_id}"),
+                        "ship_name": self._ship_db.ship_name(ship_id) or f"Ship{ship_id}",
                         "battle_type": bt,
                         "battles": d.get("battles", 0),
                         "wins": d.get("wins", 0),
@@ -465,7 +469,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                     })
             if push:
                 for ship_id, d in diffs.items():
-                    ship_name = self._ship_map.get(ship_id, f"Ship{ship_id}")
+                    ship_name = self._ship_db.ship_name(ship_id) or f"Ship{ship_id}"
                     streams = stream_ids if stream_ids is not None else self._streams_for_account(server, account_id)
                     for stream_id in streams:
                         display_mode = self._get_display_mode(stream_id)
@@ -483,7 +487,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                                 text = text + "\n" + format_record_break(broken)
                         await self._push_to_stream(text, stream_id)
 
-        if new_types:
+        if new_types and (results or name != old_snap.get("name")):
+            # 仅在检测到新对局或账号改名时写盘，避免每次轮询全量写入大快照
             self._state["snapshots"][snap_key] = {"name": name, "battle_types": new_types, "updated": time.time()}
             self._save_snapshots()
         return results
@@ -493,7 +498,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
             return
-        await self._ensure_ship_map()
+        await self._ensure_ship_db()
         enabled_types = self._enabled_types()
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
@@ -592,10 +597,6 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         binding["paused"] = True
         self._save_bindings()
         return await self._reply(stream_id, "已暂停战绩推送，/wows on 可恢复")
-
-    @Command("wows_pause", pattern=r"^/wows\s+pause$")
-    async def cmd_pause(self, **kwargs):
-        return await self.cmd_off(**kwargs)
 
     @Command("wows_add", pattern=r"^/wows\s+add\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<me>me))?$")
     async def cmd_add(self, **kwargs):
@@ -746,7 +747,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
             return await self._reply(stream_id, "本群暂无监控账号")
-        await self._ensure_ship_map()
+        await self._ensure_ship_db()
         enabled_types = self._enabled_types()
         has_new = False
         for acc in binding["accounts"]:
@@ -762,6 +763,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self.ctx.logger.exception("手动检查失败 %s:%s", server, account_id)
         if not has_new:
             return await self._reply(stream_id, "检查完成：当前无新对局")
+        return True, "", 0
 
     @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<nickname>.+))?$")
     async def cmd_nick(self, **kwargs):

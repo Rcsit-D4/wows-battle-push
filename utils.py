@@ -83,5 +83,6 @@ async def send_html_image(ctx, stream_id: str, html: str, fallback_text: str, lo
     except Exception:
         if logger:
             logger.exception("图片渲染失败，降级为文本")
-        await ctx.send.text(fallback_text, stream_id)
+        if fallback_text:
+            await ctx.send.text(fallback_text, stream_id)
         return True, fallback_text, 1
