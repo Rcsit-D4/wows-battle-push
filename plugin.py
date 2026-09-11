@@ -487,10 +487,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                                 text = text + "\n" + format_record_break(broken)
                         await self._push_to_stream(text, stream_id)
 
-        if new_types and (results or name != old_snap.get("name")):
-            # 仅在检测到新对局或账号改名时写盘，避免每次轮询全量写入大快照
+        if new_types:
+            # 内存基线始终更新（保持最新）；仅在有新对局或改名时写盘，避免每次轮询全量写入大快照
             self._state["snapshots"][snap_key] = {"name": name, "battle_types": new_types, "updated": time.time()}
-            self._save_snapshots()
+            if results or name != old_snap.get("name"):
+                self._save_snapshots()
         return results
 
     async def _refresh_snapshots_for_stream(self, stream_id: str) -> None:
