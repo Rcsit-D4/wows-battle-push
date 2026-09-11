@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 # 确保插件目录在 sys.path 中，使同目录模块可导入
@@ -468,9 +468,9 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         **extract_log_fields(d),
                     })
             if push:
+                streams = stream_ids if stream_ids is not None else self._streams_for_account(server, account_id)
                 for ship_id, d in diffs.items():
                     ship_name = self._ship_db.ship_name(ship_id) or f"Ship{ship_id}"
-                    streams = stream_ids if stream_ids is not None else self._streams_for_account(server, account_id)
                     for stream_id in streams:
                         display_mode = self._get_display_mode(stream_id)
                         if not should_broadcast_type(bt, display_mode):
@@ -517,7 +517,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
                     continue
             if new_types:
-                self._state.setdefault("snapshots", {})[snap_key] = {
+                self._state["snapshots"][snap_key] = {
                     "name": name, "battle_types": new_types, "updated": time.time()
                 }
         self._save_snapshots()
