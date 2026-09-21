@@ -16,6 +16,7 @@ class PushSection(PluginConfigBase):
     push_enabled: bool = Field(default=True, description="是否自动推送新战绩")
     admin_qq: list[str] = Field(default=[], description="管理员QQ号白名单")
     log_retention_days: int = Field(default=30, ge=7, le=365, description="战斗日志保留天数")
+    poll_concurrency: int = Field(default=6, ge=1, le=20, description="每轮并发拉取的账号数")
 
 
 class PluginConfig(PluginConfigBase):

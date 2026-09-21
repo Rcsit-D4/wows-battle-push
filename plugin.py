@@ -36,6 +36,7 @@ from battle_log import BattleLogStore, extract_log_fields
 from config import PluginConfig
 from constants import (
     EXTRA_ITEMS,
+    MODE_TEXT,
     PUBLIC_COMMANDS,
     SERVER_VORTEX,
     SHIP_MAP_REFRESH_SECONDS,
@@ -81,9 +82,6 @@ from stats import (
 )
 from utils import send_html_image
 
-MODE_TEXT = {1: "单野", 2: "单野/组排", 3: "ALL"}
-
-
 class WowsBattlePushPlugin(MaiBotPlugin):
     config_model = PluginConfig
 
@@ -95,6 +93,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._store: StateStore | None = None
         self._poller_task: asyncio.Task | None = None
         self._stopped = False
+        self._last_snap_save: float = 0.0
         self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
         self._ship_db_ts: float = 0.0
 
@@ -198,6 +197,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         leaderboard.set_ship_type_resolver(self._ship_db.ship_type_en)
         self.ctx.logger.info("插件已加载，绑定群数=%d，榜单=%s",
                              len(self._state["bindings"]), list(leaderboard.BOARDS.keys()))
+        self._last_snap_save = time.time()
+        asyncio.create_task(self._ensure_ship_db())
         self._poller_task = asyncio.create_task(self._poller_loop())
 
     async def on_unload(self) -> None:
@@ -208,6 +209,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 await self._poller_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        if self._battle_log:
+            self._battle_log.flush()
         self._save_state()
         self.ctx.logger.info("插件已卸载")
 
@@ -252,6 +255,16 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return {"success": False, "content": "当前群尚未绑定任何账号，无法查询。"}
         if not binding.get("nl_enabled", NL_DEFAULT_ENABLED):
             return {"success": False, "content": "本群已关闭自然语言查询，管理员可用 /开启自然语言查询 开启。"}
+        # "我/自己/本人"指代发送者：经 add ... me 的 QQ 绑定解析到 UID
+        player = (player or "").strip()
+        if player in ("我", "自己", "本人", "我自己"):
+            qq = self._get_sender_id(kwargs)
+            qb = binding.get("qq_bindings") or {}
+            mine = qb.get(qq) if qq else None
+            if not mine:
+                return {"success": False,
+                        "content": "尚未找到你的绑定：请先用 /add <服务器> <UID> me 完成 QQ 绑定，或用群昵称/游戏ID查询。"}
+            player = str(mine.get("account_id"))
         try:
             start, end = self._parse_date_range(date)
             if not self._ship_db.loaded:
@@ -392,30 +405,44 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         return types or ["pvp_solo"]
 
     async def _poll_once(self) -> None:
-        if not self.config.plugin.push_enabled:
-            return
-        if await leaderboard.check_daily_reset(
-            self._state, self.ctx, send_html_image, self.ctx.logger,
-            get_records_fn=lambda sid, d: self._battle_log.get_by_date(d) if self._battle_log else [],
-            is_monitored_fn=self._is_account_monitored,
-            get_nickname_fn=self._get_group_nickname,
-        ):
-            self._save_leaderboard()
-        await self._ensure_ship_db()
-        accounts = self._unique_accounts()
-        if not accounts:
-            return
-        enabled_types = self._enabled_types()
-        for server, account_id in accounts:
-            try:
-                await self._check_account(server, account_id, enabled_types, push=True)
-            except Exception:  # noqa: BLE001
-                self.ctx.logger.exception("检查账号 %s:%s 失败", server, account_id)
-        # battle 日志暂定长久保存；如需定期清理，恢复此处 cleanup_old 调用
-        # if self._battle_log:
-        #     removed = self._battle_log.cleanup_old(self.config.plugin.log_retention_days)
-        #     if removed > 0:
-        #         self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
+        try:
+            if not self.config.plugin.push_enabled:
+                return
+            if await leaderboard.check_daily_reset(
+                self._state, self.ctx, send_html_image, self.ctx.logger,
+                get_records_fn=lambda sid, d: self._battle_log.get_by_date(d) if self._battle_log else [],
+                is_monitored_fn=self._is_account_monitored,
+                get_nickname_fn=self._get_group_nickname,
+            ):
+                self._save_leaderboard()
+            await self._ensure_ship_db()
+            accounts = self._unique_accounts()
+            if not accounts:
+                return
+            enabled_types = self._enabled_types()
+            # 账号间并发拉取，信号量限流避免打爆 Vortex；账号内对局类型仍串行
+            sem = asyncio.Semaphore(self.config.plugin.poll_concurrency)
+
+            async def _check_guarded(server: str, account_id: int) -> None:
+                async with sem:
+                    try:
+                        await self._check_account(server, account_id, enabled_types, push=True)
+                    except Exception:  # noqa: BLE001
+                        self.ctx.logger.exception("检查账号 %s:%s 失败", server, account_id)
+
+            await asyncio.gather(*(_check_guarded(s, a) for s, a in accounts))
+            # battle 日志暂定长久保存；如需定期清理，恢复此处 cleanup_old 调用
+            # if self._battle_log:
+            #     removed = self._battle_log.cleanup_old(self.config.plugin.log_retention_days)
+            #     if removed > 0:
+            #         self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
+        finally:
+            # 每轮结束统一写盘战斗日志；快照每小时兜底写盘一次
+            if self._battle_log:
+                self._battle_log.flush()
+            if time.time() - self._last_snap_save > 3600:
+                self._save_snapshots()
+                self._last_snap_save = time.time()
 
     async def _check_account(
         self, server: str, account_id: int, battle_types: list[str], push: bool,
@@ -443,12 +470,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             old = old_types.get(bt) or {}
             if not old:
                 continue
-            diffs = detect_new_battles(old, new_snap)
-            if not diffs:
+            all_diffs = detect_new_battles(old, new_snap, max_battles=None)
+            if not all_diffs:
                 continue
+            diffs = {k: v for k, v in all_diffs.items() if 0 < v.get("battles", 0) <= 5}
             results[bt] = list(diffs.values())
             if self._battle_log:
-                for ship_id, d in diffs.items():
+                for ship_id, d in all_diffs.items():
                     self._battle_log.add_record({
                         "timestamp": time.time(),
                         "date": time.strftime("%Y-%m-%d"),
@@ -513,13 +541,19 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             for bt in enabled_types:
                 try:
                     name, stats = await self._api.fetch_user_ships(server, account_id, bt)
-                    new_types[bt] = summarize(stats)
                 except Exception:  # noqa: BLE001
                     self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
                     continue
+                snap = summarize(stats)
+                if not snap:
+                    # 空结果保留旧基线，避免清空导致首轮漏播
+                    continue
+                new_types[bt] = snap
             if new_types:
+                old_types = dict(self._state.get("snapshots", {}).get(snap_key, {}).get("battle_types") or {})
+                old_types.update(new_types)
                 self._state["snapshots"][snap_key] = {
-                    "name": name, "battle_types": new_types, "updated": time.time()
+                    "name": name, "battle_types": old_types, "updated": time.time()
                 }
         self._save_snapshots()
 
@@ -723,17 +757,26 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         mode = self._get_display_mode(stream_id)
         mode_text = MODE_TEXT.get(mode, str(mode))
         dmg_low, dmg_high = self._get_damage_range(stream_id)
-        extra = binding.get("extra", {})
+        extra = self._get_extra(stream_id)
         kd = get_king_data(self._state, stream_id)
         board_enabled = kd["enabled"]
         extra_text = " ".join(f"{k}={'开' if v else '关'}" for k, v in extra.items())
         board_text = " ".join(f"{leaderboard.BOARDS[key]['title_cn']}={'开' if v else '关'}" for key, v in board_enabled.items())
+        if dmg_low == 0 and dmg_high == 0:
+            range_text = "全部播报"
+        else:
+            parts = []
+            if dmg_low:
+                parts.append(f"≤{dmg_low} 播报")
+            if dmg_high:
+                parts.append(f"≥{dmg_high} 播报")
+            range_text = " / ".join(parts)
         fallback = (
             f"推送状态：{'暂停' if binding.get('paused') else '运行中'}\n"
             f"自然语言查询：{'开启' if binding.get('nl_enabled', NL_DEFAULT_ENABLED) else '关闭'}\n"
             f"榜单开关：{board_text}\n"
             f"显示模式：{mode}（{mode_text}）\n"
-            f"伤害范围：≤{dmg_low} 或 ≥{dmg_high}\n"
+            f"伤害范围：{range_text}\n"
             f"额外播报：{extra_text}\n"
             f"监控账号：{len(binding.get('accounts', []))} 个"
         )

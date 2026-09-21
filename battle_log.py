@@ -25,6 +25,7 @@ class BattleLogStore:
     def __init__(self, plugin_dir: Path):
         self._path = plugin_dir / BATTLE_LOG_FILE
         self._data: dict[str, Any] = {}
+        self._dirty = False
         self._load()
 
     def _load(self) -> None:
@@ -47,10 +48,17 @@ class BattleLogStore:
             pass
 
     def add_record(self, record: dict[str, Any]) -> None:
-        """添加一条战斗记录，按日期归档"""
+        """添加一条战斗记录，按日期归档（标记脏，由 flush 统一写盘）"""
         date_key = record.get("date") or datetime.now().strftime("%Y-%m-%d")
         self._data.setdefault("logs", {}).setdefault(date_key, []).append(record)
+        self._dirty = True
+
+    def flush(self) -> None:
+        """把累积的记录一次性写盘（轮询结束调用，减少 IO）"""
+        if not self._dirty:
+            return
         self._save()
+        self._dirty = False
 
     def get_by_date(self, date_str: str) -> list[dict]:
         return self._data.get("logs", {}).get(date_str, [])

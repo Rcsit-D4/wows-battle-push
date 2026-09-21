@@ -3,7 +3,8 @@
 
 from html import escape
 
-from constants import EXTRA_ITEMS
+from constants import EXTRA_ITEMS, MODE_TEXT
+from stats import normalize_extra
 from leaderboard import BOARDS, cmd_specs
 from utils import bg_style, read_template
 
@@ -109,8 +110,18 @@ def build_status_html(binding: dict | None, board_enabled: dict[str, bool], nl_e
 
     paused = binding.get("paused", False)
     mode = binding.get("display_mode", 3)
-    mode_text = {1: "单野", 2: "单野/组排", 3: "ALL"}.get(mode, str(mode))
-    extra = binding.get("extra", {})
+    mode_text = MODE_TEXT.get(mode, str(mode))
+    extra = normalize_extra(binding.get("extra"))
+    low, high = binding.get("damage_low", 0) or 0, binding.get("damage_high", 0) or 0
+    if low == 0 and high == 0:
+        range_text = "全部播报"
+    else:
+        parts = []
+        if low:
+            parts.append(f"≤{low} 播报")
+        if high:
+            parts.append(f"≥{high} 播报")
+        range_text = " / ".join(parts)
     accounts = binding.get("accounts", [])
 
     def tag(on: bool) -> str:
@@ -139,7 +150,7 @@ def build_status_html(binding: dict | None, board_enabled: dict[str, bool], nl_e
 <div class="panel">
 <div class="section-title">播报设置</div>
 <div class="row"><span class="row-label">显示模式</span><span class="row-value">模式 {mode}（{mode_text}）</span></div>
-<div class="row"><span class="row-label">伤害范围</span><span class="row-value">≤{binding.get('damage_low', 0)} 或 ≥{binding.get('damage_high', 0)} 播报</span></div>
+<div class="row"><span class="row-label">伤害范围</span><span class="row-value">{range_text}</span></div>
 </div>
 <div class="panel">
 <div class="section-title">额外播报</div>

@@ -18,6 +18,10 @@ def read_template(name: str) -> Template:
         return Template(f.read())
 
 
+# 背景图缓存：page -> (文件mtime, data URI)；替换底图后 mtime 变化自动失效
+_BG_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
 def find_background_image(page: str = "") -> str | None:
     """查找背景图并转为 data URI，优先按页面名（如 help_bg），其次通用底图"""
     search_dirs = [IMAGES_DIR, os.path.join(_PLUGIN_DIR, "assets"), _PLUGIN_DIR]
@@ -29,16 +33,25 @@ def find_background_image(page: str = "") -> str | None:
         ("background.png", "png"), ("background.jpg", "jpeg"),
         ("bg.png", "png"), ("bg.jpg", "jpeg"),
     ]
+    cached = _BG_CACHE.get(page)
     for d in search_dirs:
         for name, mime in candidates:
             path = os.path.join(d, name)
             if os.path.isfile(path):
+                mtime = os.path.getmtime(path)
+                if cached is not None and cached[0] == mtime:
+                    return cached[1]
                 try:
                     with open(path, "rb") as f:
                         b64 = base64.b64encode(f.read()).decode("ascii")
-                    return f"data:image/{mime};base64,{b64}"
+                    uri = f"data:image/{mime};base64,{b64}"
+                    _BG_CACHE[page] = (mtime, uri)
+                    return uri
                 except Exception:
                     pass
+    if cached is not None:
+        return cached[1]
+    _BG_CACHE[page] = (0.0, None)
     return None
 
 

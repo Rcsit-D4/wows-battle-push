@@ -16,6 +16,7 @@ TOOL_DESCRIPTION = (
     "注意：只有群内明确询问战绩/伤害/场次/舰种/胜负等数据时才调用；无关闲聊不要调用。"
     "参数填写规则："
     "player 可用群昵称或游戏ID（如'XXX'），用户明确提到某人时必填，不填表示统计本群全部绑定玩家；"
+    "用户说'我/自己/本人'时 player 填'我'，工具会通过发送者QQ绑定自动解析到对应账号；"
     "date 支持'今天/昨天/这个星期/上周/这个月/上月/最近N天/YYYY-MM-DD'，不填默认今天；"
     "ship_type 为舰种中文名（航母/战列舰/巡洋舰/驱逐舰/潜艇，潜艇俗称'小人'）。"
     "用户提到舰种/船种/某类船时，必须把 ship_type 填上交给工具过滤，禁止自行判断某艘船属于什么舰种；"
@@ -119,11 +120,13 @@ def _stats_block(records: list[dict], ship_db: ShipDb, group_accounts: list[dict
             "total_damage": 0, "max_damage": 0, "max_kills": 0, "count": 0, "wins": 0,
         })
         b["records"].append(r)
-        b["count"] += 1
+        b["count"] += r.get("battles", 1)
         dmg = r.get("damage") or 0
         b["total_damage"] += dmg
-        b["max_damage"] = max(b["max_damage"], dmg)
-        b["max_kills"] = max(b["max_kills"], r.get("kills") or 0)
+        # 单场最高仅统计 battles==1 的真实单局；合并记录（battles>1）伤害为累计值不参与
+        if r.get("battles", 1) == 1:
+            b["max_damage"] = max(b["max_damage"], dmg)
+            b["max_kills"] = max(b["max_kills"], r.get("kills") or 0)
         b["wins"] += r.get("wins") or 0
     # 按总伤害降序
     return sorted(blocks.values(), key=lambda b: b["total_damage"], reverse=True)
@@ -180,19 +183,28 @@ def _run_query_impl(
         if not mine:
             return f"{name} 该日期没有符合条件的战斗记录。"
         if m == "最高伤害":
-            top = max(mine, key=lambda r: r.get("damage") or 0)
+            singles = [r for r in mine if r.get("battles", 1) == 1]
+            if not singles:
+                return f"{name} 该条件下没有可统计的单场记录（均为合并战绩）"
+            top = max(singles, key=lambda r: r.get("damage") or 0)
             return f"{name} 最高伤害 {_format_num(top.get('damage'))}（{top.get('ship_name')}）"
         if m == "最高击杀":
-            top = max(mine, key=lambda r: r.get("kills") or 0)
+            singles = [r for r in mine if r.get("battles", 1) == 1]
+            if not singles:
+                return f"{name} 该条件下没有可统计的单场记录（均为合并战绩）"
+            top = max(singles, key=lambda r: r.get("kills") or 0)
             return f"{name} 单场最高击杀 {top.get('kills')}（{top.get('ship_name')}）"
         if m == "场均伤害":
-            avg = sum(r.get("damage") or 0 for r in mine) / len(mine)
-            return f"{name} 共 {len(mine)} 场，场均伤害 {_format_num(avg)}"
+            battles = sum(r.get("battles", 1) for r in mine)
+            avg = sum(r.get("damage") or 0 for r in mine) / battles
+            return f"{name} 共 {battles} 场，场均伤害 {_format_num(avg)}"
         if m == "胜场":
             wins = sum(r.get("wins") or 0 for r in mine)
-            return f"{name} 共 {len(mine)} 场，胜 {wins} 场"
+            battles = sum(r.get("battles", 1) for r in mine)
+            return f"{name} 共 {battles} 场，胜 {wins} 场"
         # 场次
-        return f"{name} 共打了 {len(mine)} 场"
+        battles = sum(r.get("battles", 1) for r in mine)
+        return f"{name} 共打了 {battles} 场"
 
     # 全群排行（或多人匹配）
     blocks = _stats_block(filtered, ship_db, group_accounts)

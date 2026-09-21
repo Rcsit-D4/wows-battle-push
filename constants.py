@@ -47,6 +47,15 @@ ENCYCLOPEDIA_HEADERS = {"Yuyuko-Client-Type": "SWAGGER;test"}
 
 SHIP_MAP_REFRESH_SECONDS = 6 * 3600
 
+# 播报显示模式文案
+MODE_TEXT: dict[int, str] = {1: "单野", 2: "单野/组排", 3: "ALL"}
+
+# 与内置命令冲突的榜单保留 key（register_board 时断言）
+RESERVED_BOARD_KEYS: set[str] = {
+    "help", "adminhelp", "lbhelp", "on", "off", "add", "remove",
+    "list", "check", "nick", "mode", "range", "extra", "nl", "status",
+}
+
 # 额外播报项：key=指令参数, value=显示名
 EXTRA_ITEMS: dict[str, str] = {
     "kills": "击杀",

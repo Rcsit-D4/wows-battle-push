@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """排行榜：榜单注册表 + 窝窝king/窝批实现 + 日/月/历史 + HTML 生成"""
 
-from datetime import date
+from datetime import date, timedelta
 from html import escape
 from typing import Any, Callable
 
-from constants import KING_DAMAGE_TIE_THRESHOLD
+from constants import KING_DAMAGE_TIE_THRESHOLD, RESERVED_BOARD_KEYS
 from utils import bg_style, read_template
 
 BOARD_KING = "king"
@@ -94,6 +94,7 @@ def register_board(
     cmd_cn_on: str = "",
     cmd_cn_off: str = "",
 ) -> str:
+    assert key not in RESERVED_BOARD_KEYS, f"榜单 key '{key}' 与内置命令保留名冲突"
     BOARDS[key] = {
         "key": key, "title_cn": title_cn, "title_en": title_en,
         "rank_fn": rank_fn, "build_html_fn": build_html_fn,
@@ -442,18 +443,26 @@ async def check_daily_reset(state, ctx, send_image_fn, logger,
                             get_records_fn=None, is_monitored_fn=None, get_nickname_fn=None) -> bool:
     """跨天：对每个已开启的榜单推送昨日榜、保存历史、更新月度，并重置当日"""
     today = today_str()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
     changed = False
     for stream_id, sd in list(state.get("daily_king", {}).items()):
         if sd.get("date") == today:
             continue
-        yesterday = sd.get("date", "未知")
+        # 停机/暂停多天恢复：跳过中间天的结算，从昨天开始
+        old_date = sd.get("date", "")
+        try:
+            old_d = date.fromisoformat(old_date) if old_date else None
+        except (TypeError, ValueError):
+            old_d = None
+        if old_d is None or old_d < date.today() - timedelta(days=1):
+            sd["date"] = yesterday
         enabled = _migrate_enabled(sd)
         sd["enabled"] = enabled
         for key, board in BOARDS.items():
             if not enabled.get(key):
                 continue
             ranked = None
-            if get_records_fn and yesterday != "未知":
+            if get_records_fn:
                 day_records = get_records_fn(stream_id, yesterday)
                 monitored = set()
                 if is_monitored_fn:

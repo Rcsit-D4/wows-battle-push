@@ -20,7 +20,7 @@ class WowsApi:
         """同步 HTTP GET，带重试；headers 缺省使用 Vortex 头"""
         headers = headers or VORTEX_HEADERS
         last_exc: Exception | None = None
-        for attempt in range(self.retries):
+        for attempt in range(self.retries + 1):  # 首次请求 + retries 次重试
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -29,7 +29,7 @@ class WowsApi:
                     return resp.read()
             except (urllib.error.URLError, OSError, RuntimeError) as e:
                 last_exc = e
-                if attempt < self.retries - 1:
+                if attempt < self.retries:
                     continue
         raise RuntimeError(f"请求失败 {url}: {last_exc}") from last_exc
 

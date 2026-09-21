@@ -30,8 +30,19 @@ def _broadcast_fields(ship: dict[str, int]) -> dict[str, int]:
     }
 
 
+# 快照保留字段白名单（其余字段丢弃以减小文件体积）
+SNAPSHOT_KEEP: set[str] = {
+    "battles_count", "wins", "losses", "damage_dealt", "frags",
+    "exp", "original_exp", "scouting_damage",
+    "survived", "win_and_survived",
+    "planes_killed", "ships_spotted",
+    "capture_points", "dropped_capture_points",
+    "shots_by_main", "hits_by_main", "shots_by_tpd", "hits_by_tpd",
+}
+
+
 def summarize(stats: dict[int, dict[str, Any]]) -> dict[int, dict[str, int]]:
-    """压缩 API 原始统计为快照，仅保留有对局的船（battles>0）"""
+    """压缩 API 原始统计为快照，仅保留有对局的船（battles>0）与必要字段"""
     out: dict[int, dict[str, int]] = {}
     for ship_id, st in stats.items():
         if _int(st.get("battles_count")) <= 0:
@@ -39,7 +50,8 @@ def summarize(stats: dict[int, dict[str, Any]]) -> dict[int, dict[str, int]]:
         snap: dict[str, int] = {}
         for k, v in st.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool):
-                snap[k] = _int(v)
+                if k in SNAPSHOT_KEEP or k.endswith("_agro") or k.startswith("max_"):
+                    snap[k] = _int(v)
         out[int(ship_id)] = snap
     return out
 
@@ -47,9 +59,10 @@ def summarize(stats: dict[int, dict[str, Any]]) -> dict[int, dict[str, int]]:
 def detect_new_battles(
     old: dict[int, dict[str, int]],
     new: dict[int, dict[str, int]],
-    max_battles: int = 5,
+    max_battles: int | None = 5,
 ) -> dict[int, dict[str, int]]:
-    """对比新旧快照，返回有新增对局的船及其差值。旧快照不存在的船或单船超过 max_battles 局不播报。"""
+    """对比新旧快照，返回有新增对局的船及其差值。旧快照不存在的船跳过；
+    max_battles=None 返回所有新增（不限局数，供日志完整落盘），默认仅返回 1~max_battles 局（供播报）。"""
     result: dict[int, dict[str, int]] = {}
     for ship_id, n in new.items():
         o = old.get(ship_id)
@@ -57,7 +70,8 @@ def detect_new_battles(
             continue
         d = {k: n.get(k, 0) - o.get(k, 0) for k in set(n) | set(o)}
         d.update(_broadcast_fields(d))
-        if 0 < d.get("battles", 0) <= max_battles:
+        b = d.get("battles", 0)
+        if b > 0 and (max_battles is None or b <= max_battles):
             result[ship_id] = d
     return result
 
