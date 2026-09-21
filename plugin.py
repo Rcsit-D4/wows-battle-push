@@ -195,6 +195,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     async def on_load(self) -> None:
         self._load_state()
         self._battle_log = BattleLogStore(Path(__file__).parent / "data")
+        leaderboard.set_ship_type_resolver(self._ship_db.ship_type_en)
         self.ctx.logger.info("插件已加载，绑定群数=%d，榜单=%s",
                              len(self._state["bindings"]), list(leaderboard.BOARDS.keys()))
         self._poller_task = asyncio.create_task(self._poller_loop())

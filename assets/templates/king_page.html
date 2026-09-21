@@ -24,11 +24,16 @@ body { margin:0; padding:22px; font-family:'Microsoft YaHei','PingFang SC','Noto
 .crown { position:absolute; top:-16px; right:-26px; font-size:23px; transform:rotate(25deg); color:#FFD700; text-shadow:0 1px 3px rgba(184,134,11,0.5); }
 .top3-stats { font-size:15px; color:#555; line-height:1.6; }
 
-/* 窝批榜：场次在名字右侧，字体比名字略大 */
-.wopi-battles { font-size:32px; font-weight:bold; color:#e94560; flex-shrink:0; margin-left:12px; }
+/* 窝批榜：场次在名字右侧，字体比名字略大；下方小字显示组排分布 */
+.wopi-battles-col { flex-shrink:0; margin-left:12px; text-align:right; }
+.wopi-battles { font-size:32px; font-weight:bold; color:#e94560; }
 .rank-1 .wopi-battles { font-size:36px; }
 .rank-2 .wopi-battles { font-size:30px; }
 .rank-3 .wopi-battles { font-size:26px; }
+.wopi-group { font-size:13px; color:#999; margin-top:2px; white-space:nowrap; }
+
+/* 舰种称号（昵称右侧小徽章） */
+.ship-title { font-size:0.5em; color:#e94560; background:rgba(233,69,96,0.12); border-radius:10px; padding:1px 8px; margin-left:6px; font-weight:bold; vertical-align:middle; display:inline-block; }
 
 /* 其余玩家 - 字号放大15% */
 .normal-row { display:flex; align-items:center; padding:12px 0; border-bottom:1px solid rgba(0,0,0,0.05); font-size:18px; justify-content:flex-start; }
@@ -36,8 +41,8 @@ body { margin:0; padding:22px; font-family:'Microsoft YaHei','PingFang SC','Noto
 .normal-rank { width:40px; text-align:center; color:#888; font-weight:bold; margin-right:14px; flex-shrink:0; }
 .normal-name { flex:1; color:#333; font-weight:bold; }
 .normal-name .game-id { font-size:0.7em; }
-.normal-stats { font-size:16px; color:#666; flex-shrink:0; }
-.wopi-battles-small { font-size:20px; font-weight:bold; color:#e94560; flex-shrink:0; }
+.normal-stats { font-size:16px; color:#666; flex-shrink:0; display:flex; flex-direction:column; align-items:flex-end; line-height:1.45; }
+.wopi-battles-small { font-size:20px; font-weight:bold; color:#e94560; }
 
 .section-title { font-size:23px; font-weight:bold; color:#e94560; border-left:4px solid #e94560; padding-left:12px; margin-bottom:16px; }
 .empty { text-align:center; color:#999; font-size:20px; padding:24px 0; }

@@ -3,6 +3,7 @@
 
 from datetime import date
 from html import escape
+from typing import Any, Callable
 
 from constants import KING_DAMAGE_TIE_THRESHOLD
 from utils import bg_style, read_template
@@ -12,6 +13,22 @@ BOARD_WOPI = "wopi"
 PERIOD_DAILY = "daily"
 PERIOD_MONTHLY = "monthly"
 MONTHLY_SCORE = {1: 5, 2: 3, 3: 1}
+
+# 舰种称号：按总场次中玩得最多的舰种显示（潜艇未定义称号则不显示）
+SHIP_TITLE_MAP: dict[str, str] = {
+    "AirCarrier": "航出",
+    "Battleship": "BB大爷",
+    "Cruiser": "达利特",
+    "Destroyer": "DD糕手",
+}
+
+# 舰种解析器（plugin 注入 ship_db.ship_type_en），供窝批榜统计舰种分布
+_ship_type_fn: Callable[[Any], str] | None = None
+
+
+def set_ship_type_resolver(fn: Callable[[Any], str]) -> None:
+    global _ship_type_fn
+    _ship_type_fn = fn
 
 
 # ---------- 通用工具 ----------
@@ -246,25 +263,50 @@ def rank_king_from_logs(records, monitored_keys, get_nickname_fn=None, stream_id
     return rank_king(best)
 
 
+def _ship_title(ship_types: dict[str, int]) -> str:
+    """按舰种场次最多的类型返回称号；并列取先出现的类型，未知舰种返回空"""
+    if not ship_types:
+        return ""
+    top_type = max(ship_types, key=ship_types.get)
+    return SHIP_TITLE_MAP.get(top_type, "")
+
+
 def rank_wopi_from_logs(records, monitored_keys, get_nickname_fn=None, stream_id=None):
-    """窝批：统计总场次"""
+    """窝批：统计总场次 + 组排分布（单野/双排/三排）+ 舰种分布"""
     counts: dict[str, dict] = {}
     for r in records:
         key = f"{r.get('server', '')}:{r.get('account_id', 0)}"
         if key not in monitored_keys:
             continue
+        battles = r.get("battles", 0)
+        bt = r.get("battle_type", "")
+        ship_type = _ship_type_fn(r.get("ship_id", 0)) if _ship_type_fn else ""
         acc = counts.get(key)
         if acc is None:
             nick = get_nickname_fn(stream_id, r.get("server", ""), r.get("account_id", 0)) if get_nickname_fn and stream_id else None
-            counts[key] = {
+            acc = counts[key] = {
                 "name": r.get("account_name", "未知"),
                 "group_nickname": nick,
                 "server": r.get("server", ""),
                 "account_id": r.get("account_id", 0),
-                "battles": r.get("battles", 0),
+                "battles": battles,
+                "solo": battles if bt == "pvp_solo" else 0,
+                "div2": battles if bt == "pvp_div2" else 0,
+                "div3": battles if bt == "pvp_div3" else 0,
+                "ship_types": {ship_type: battles} if ship_type else {},
             }
         else:
-            acc["battles"] += r.get("battles", 0)
+            acc["battles"] += battles
+            if bt == "pvp_solo":
+                acc["solo"] += battles
+            elif bt == "pvp_div2":
+                acc["div2"] += battles
+            elif bt == "pvp_div3":
+                acc["div3"] += battles
+            if ship_type:
+                acc["ship_types"][ship_type] = acc["ship_types"].get(ship_type, 0) + battles
+    for acc in counts.values():
+        acc["title"] = _ship_title(acc.get("ship_types", {}))
     return rank_wopi(counts)
 
 
@@ -311,10 +353,18 @@ def _update_monthly_wopi(sd, ranked) -> None:
     mw = m.setdefault(BOARD_WOPI, {})
     for acc in ranked:
         name = acc.get("name", "未知")
-        e = mw.get(name) or {"group_nickname": acc.get("group_nickname"), "battles": 0}
+        e = mw.get(name)
+        if e is None:
+            e = mw[name] = {"group_nickname": acc.get("group_nickname"), "battles": 0,
+                            "solo": 0, "div2": 0, "div3": 0, "ship_types": {}}
         e["group_nickname"] = acc.get("group_nickname")
         e["battles"] += acc.get("battles", 0)
-        mw[name] = e
+        e["solo"] += acc.get("solo", 0)
+        e["div2"] += acc.get("div2", 0)
+        e["div3"] += acc.get("div3", 0)
+        for t, n in (acc.get("ship_types") or {}).items():
+            e["ship_types"][t] = e["ship_types"].get(t, 0) + n
+        e["title"] = _ship_title(e["ship_types"])
 
 
 def _last_info_king(ranked, day) -> dict:
@@ -411,25 +461,41 @@ def _king_rest_rows(ranked, is_monthly=False) -> str:
     return rows
 
 
+def _wopi_group_text(acc: dict) -> str:
+    """组排分布文本：单野/双排/三排（全为0时返回空）"""
+    parts = []
+    if acc.get("solo", 0):
+        parts.append(f"单野{acc['solo']}场")
+    if acc.get("div2", 0):
+        parts.append(f"双排{acc['div2']}场")
+    if acc.get("div3", 0):
+        parts.append(f"三排{acc['div3']}场")
+    return "、".join(parts)
+
+
 def _wopi_top3_rows(ranked) -> str:
     rows = ""
     for acc in ranked[:3]:
         r = acc["rank"]
         crown = '<span class="crown">♛</span>' if r == 1 else ""
+        title = f'<span class="ship-title">{escape(acc.get("title", ""))}</span>' if acc.get("title") else ""
+        group = escape(_wopi_group_text(acc))
         rows += f"""<div class="top3-row rank-{r}">
 <div class="rank-badge">{r}</div>
-<div class="top3-info"><div class="top3-name">{_display_name(acc)}{crown}</div></div>
-<div class="wopi-battles">{acc.get('battles', 0)}场</div></div>"""
+<div class="top3-info"><div class="top3-name">{_display_name(acc)}{title}{crown}</div></div>
+<div class="wopi-battles-col"><div class="wopi-battles">{acc.get('battles', 0)}场</div>{f'<div class="wopi-group">{group}</div>' if group else ""}</div></div>"""
     return rows
 
 
 def _wopi_rest_rows(ranked) -> str:
     rows = ""
     for acc in ranked[3:10]:
+        title = f'<span class="ship-title">{escape(acc.get("title", ""))}</span>' if acc.get("title") else ""
+        group = escape(_wopi_group_text(acc))
         rows += f"""<div class="normal-row">
 <span class="normal-rank">{acc['rank']}</span>
-<span class="normal-name">{_display_name(acc)}</span>
-<span class="wopi-battles-small">{acc.get('battles', 0)}场</span></div>"""
+<span class="normal-name">{_display_name(acc)}{title}</span>
+<span class="normal-stats"><span class="wopi-battles-small">{acc.get('battles', 0)}场</span>{f'<span class="wopi-group">{group}</span>' if group else ""}</span></div>"""
     return rows
 
 
