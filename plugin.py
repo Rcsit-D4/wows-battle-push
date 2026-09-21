@@ -966,12 +966,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if not board.get("supports_month") or not board.get("build_month_fn"):
             return await self._reply(stream_id, f"{board['title_cn']}榜不支持月榜")
         kd = get_king_data(self._state, stream_id)
-        target = (month or (month_str() or "")[:6]).strip()
+        current = (month_str() or "").replace("-", "")  # "2026-09" -> "202609"
+        target = (month or current).strip()
         if len(target) != 6 or not target.isdigit():
             return await self._reply(stream_id, "月份格式错误，如 /wows king month 202608")
         year, mon = int(target[:4]), int(target[4:6])
         month_iso = f"{year:04d}-{mon:02d}"
-        if target == (month_str() or "")[:6]:
+        if target == current:
             # 当月：从战斗日志实时计算
             if not self._battle_log or not board.get("month_rank_from_logs_fn"):
                 return await self._reply(stream_id, f"本月暂无{board['title_cn']}榜数据")
