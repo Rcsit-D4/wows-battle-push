@@ -922,7 +922,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             date_iso = parse_date((kwargs.get("matched_groups") or {}).get("date", ""))
             return await self._cmd_board_history(board_key, stream_id, date_iso)
         if action == "month":
-            return await self._cmd_board_month(board_key, stream_id)
+            month = (kwargs.get("matched_groups") or {}).get("month", "")
+            return await self._cmd_board_month(board_key, stream_id, month or None)
         if action == "toggle":
             value = spec.get("toggle_value")
             if value is None:
@@ -960,18 +961,34 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         html = board["build_html_fn"](ranked, date_iso, None, PERIOD_DAILY)
         return await self._reply_image(stream_id, html, f"{date_iso} {board['title_cn']}榜")
 
-    async def _cmd_board_month(self, board_key: str, stream_id: str) -> tuple[bool, str, int]:
+    async def _cmd_board_month(self, board_key: str, stream_id: str, month: str | None = None) -> tuple[bool, str, int]:
         board = leaderboard.BOARDS[board_key]
         if not board.get("supports_month") or not board.get("build_month_fn"):
             return await self._reply(stream_id, f"{board['title_cn']}榜不支持月榜")
         kd = get_king_data(self._state, stream_id)
-        monthly = kd.get("monthly", {}).get(month_str(), {}).get(board_key, {})
-        ranked = board["month_rank_fn"](monthly)
+        target = (month or (month_str() or "")[:6]).strip()
+        if len(target) != 6 or not target.isdigit():
+            return await self._reply(stream_id, "月份格式错误，如 /wows king month 202608")
+        year, mon = int(target[:4]), int(target[4:6])
+        month_iso = f"{year:04d}-{mon:02d}"
+        if target == (month_str() or "")[:6]:
+            # 当月：从战斗日志实时计算
+            if not self._battle_log or not board.get("month_rank_from_logs_fn"):
+                return await self._reply(stream_id, f"本月暂无{board['title_cn']}榜数据")
+            next_month = date(year + 1, 1, 1) if mon == 12 else date(year, mon + 1, 1)
+            records = self._battle_log.get_by_date_range(
+                f"{month_iso}-01", (next_month - timedelta(days=1)).isoformat())
+            ranked = board["month_rank_from_logs_fn"](
+                records, self._monitored_keys(stream_id), self._get_group_nickname, stream_id)
+        else:
+            # 历史月：读取月初已固定的数据
+            monthly = kd.get("monthly", {}).get(month_iso, {}).get(board_key, {})
+            ranked = board["month_rank_fn"](monthly)
         if not ranked:
-            return await self._reply(stream_id, f"本月暂无{board['title_cn']}榜数据")
+            return await self._reply(stream_id, f"{month_iso} 暂无{board['title_cn']}榜数据")
         self._refresh_ranked_nicknames(stream_id, ranked)
-        html = board["build_month_fn"](ranked, month_str())
-        return await self._reply_image(stream_id, html, "本月暂无数据")
+        html = board["build_month_fn"](ranked, month_iso)
+        return await self._reply_image(stream_id, html, f"{month_iso} {board['title_cn']}榜")
 
     async def _cmd_board_toggle(self, board_key: str, stream_id: str, value: bool) -> tuple[bool, str, int]:
         board = leaderboard.BOARDS[board_key]

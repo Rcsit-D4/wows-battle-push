@@ -80,8 +80,9 @@ def register_board(
     title_en: str,
     rank_fn,                 # (records, monitored_keys, get_nickname_fn=None, stream_id=None) -> 当日榜
     build_html_fn,           # (ranked, date_str, last=None, period=PERIOD_DAILY) -> HTML
-    month_rank_fn=None,      # (monthly_data) -> 月榜
+    month_rank_fn=None,      # (monthly_data) -> 月榜（固定数据）
     build_month_fn=None,     # (ranked, month) -> 月榜 HTML
+    month_rank_from_logs_fn=None,  # (records, monitored_keys, get_nickname_fn, stream_id) -> 当月实时月榜
     monthly_update_fn=None,  # (sd, ranked) -> 跨天更新月度统计
     last_info_fn=None,       # (ranked, date) -> 昨日/底部信息 dict
     supports_history: bool = True,
@@ -97,6 +98,7 @@ def register_board(
         "key": key, "title_cn": title_cn, "title_en": title_en,
         "rank_fn": rank_fn, "build_html_fn": build_html_fn,
         "month_rank_fn": month_rank_fn, "build_month_fn": build_month_fn,
+        "month_rank_from_logs_fn": month_rank_from_logs_fn,
         "monthly_update_fn": monthly_update_fn, "last_info_fn": last_info_fn,
         "supports_history": supports_history, "supports_month": supports_month,
         "view_public": view_public,
@@ -121,9 +123,9 @@ def cmd_specs(key: str, board: dict) -> list[dict]:
                           cmd_cn=f"/{b['cmd_cn_history']} <日期>" if b.get("cmd_cn_history") else ""))
     if b["supports_month"]:
         specs.append(dict(method=f"wows_{key}_month", name=f"wows_{key}_month",
-                          pattern=f"^/wows\\s+{key}\\s+month$", public=b["view_public"],
-                          action="month", cmd=f"/wows {key} month",
-                          cmd_cn=f"/{b['cmd_cn_month']}" if b.get("cmd_cn_month") else ""))
+                          pattern=f"^/wows\\s+{key}\\s+month(?:\\s+(?P<month>\\d{{6}}))?$", public=b["view_public"],
+                          action="month", cmd=f"/wows {key} month <202608>",
+                          cmd_cn=f"/{b['cmd_cn_month']} <202608>" if b.get("cmd_cn_month") else ""))
     specs.append(dict(method=f"wows_{key}_toggle", name=f"wows_{key}_toggle",
                       pattern=f"^/wows\\s+{key}\\s+(?P<action>on|off)$", public=False,
                       action="toggle", cmd=f"/wows {key} <on|off>",
@@ -138,8 +140,8 @@ def cmd_specs(key: str, board: dict) -> list[dict]:
                           action="history", cmd=f"/{b['cmd_cn_history']} <日期>", cmd_cn=""))
     if b.get("cmd_cn_month") and b["supports_month"]:
         specs.append(dict(method=f"cn_{key}_month", name=f"cn_{key}_month",
-                          pattern=f"^/{b['cmd_cn_month']}$", public=b["view_public"],
-                          action="month", cmd=f"/{b['cmd_cn_month']}", cmd_cn=""))
+                          pattern=f"^/{b['cmd_cn_month']}(?:\\s+(?P<month>\\d{{6}}))?$", public=b["view_public"],
+                          action="month", cmd=f"/{b['cmd_cn_month']} <202608>", cmd_cn=""))
     if b.get("cmd_cn_on"):
         specs.append(dict(method=f"cn_{key}_on", name=f"cn_{key}_on",
                           pattern=f"^/{b['cmd_cn_on']}$", public=False,
@@ -311,8 +313,48 @@ def rank_wopi_from_logs(records, monitored_keys, get_nickname_fn=None, stream_id
 
 
 def rank_monthly_king(data):
-    """月度窝窝king：按积分和前三次数排序"""
-    items = [dict(v, name=k) for k, v in data.items()]
+    """月度窝窝king（固定数据）：按积分和前三次数排序；条目可能为 uid-key 或昵称-key 两种旧格式"""
+    items = []
+    for k, v in data.items():
+        acc = dict(v)
+        acc["key"] = k
+        acc["name"] = v.get("name") or k
+        items.append(acc)
+    items.sort(key=lambda a: (a.get("score", 0), a.get("top3_count", 0)), reverse=True)
+    for i, acc in enumerate(items):
+        acc["rank"] = i + 1
+    return items
+
+
+def rank_king_monthly_from_logs(records, monitored_keys, get_nickname_fn=None, stream_id=None):
+    """月度窝窝king（实时）：逐日排名累计前三/积分 + 本月单局最佳"""
+    by_day: dict[str, list] = {}
+    for r in records:
+        by_day.setdefault(r.get("date", ""), []).append(r)
+    accs: dict[str, dict] = {}
+    for day_recs in by_day.values():
+        for acc in rank_king_from_logs(day_recs, monitored_keys, get_nickname_fn, stream_id):
+            e = accs.get(acc["key"])
+            if e is None:
+                e = accs[acc["key"]] = {
+                    "name": acc.get("name", "未知"), "group_nickname": acc.get("group_nickname"),
+                    "server": acc.get("server", ""), "account_id": acc.get("account_id", 0),
+                    "top3_count": 0, "score": 0, "champion": 0, "runner_up": 0, "third": 0,
+                    "best_damage": 0, "best_kills": 0, "best_xp": 0, "best_win": False, "ship_name": "",
+                }
+            if acc["rank"] <= 3:
+                e["top3_count"] += 1
+                e["score"] += MONTHLY_SCORE.get(acc["rank"], 0)
+                rk = {1: "champion", 2: "runner_up", 3: "third"}.get(acc["rank"])
+                if rk:
+                    e[rk] = e.get(rk, 0) + 1
+            if acc.get("best_damage", 0) > e["best_damage"]:
+                e["best_damage"] = acc.get("best_damage", 0)
+                e["best_kills"] = acc.get("best_kills", 0)
+                e["best_xp"] = acc.get("best_xp", 0)
+                e["best_win"] = acc.get("best_win", False)
+                e["ship_name"] = acc.get("ship_name", "")
+    items = [dict(v, key=k) for k, v in accs.items() if v["top3_count"] > 0]
     items.sort(key=lambda a: (a.get("score", 0), a.get("top3_count", 0)), reverse=True)
     for i, acc in enumerate(items):
         acc["rank"] = i + 1
@@ -320,8 +362,13 @@ def rank_monthly_king(data):
 
 
 def rank_monthly_wopi(data):
-    """月度窝批：按总场次排序"""
-    items = [dict(v, name=k) for k, v in data.items()]
+    """月度窝批：按总场次排序；条目可能为 uid-key 或昵称-key 两种旧格式"""
+    items = []
+    for k, v in data.items():
+        acc = dict(v)
+        acc["key"] = k
+        acc["name"] = v.get("name") or k
+        items.append(acc)
     items.sort(key=lambda a: a.get("battles", 0), reverse=True)
     for i, acc in enumerate(items):
         acc["rank"] = i + 1
@@ -335,28 +382,38 @@ def _update_monthly_king(sd, ranked) -> None:
     mk = m.setdefault(BOARD_KING, {})
     rank_key_map = {1: "champion", 2: "runner_up", 3: "third"}
     for acc in ranked[:3]:
-        name = acc.get("name", "未知")
-        e = mk.get(name) or {"group_nickname": acc.get("group_nickname"), "top3_count": 0,
-                             "score": 0, "champion": 0, "runner_up": 0, "third": 0, "best_damage": 0}
+        key = acc.get("key") or acc.get("name")
+        if not key:
+            continue
+        e = mk.get(key)
+        if e is None:
+            e = mk[key] = {"name": acc.get("name", "未知"), "group_nickname": acc.get("group_nickname"),
+                           "top3_count": 0, "score": 0, "champion": 0, "runner_up": 0, "third": 0, "best_damage": 0}
+        e["name"] = acc.get("name", e["name"])  # 覆盖为最新游戏名
         e["group_nickname"] = acc.get("group_nickname")
         e["top3_count"] += 1
         e["score"] += MONTHLY_SCORE.get(acc.get("rank"), 0)
         rk = rank_key_map.get(acc.get("rank"))
         if rk:
             e[rk] = e.get(rk, 0) + 1
-        e["best_damage"] = max(e["best_damage"], acc.get("best_damage", 0))
-        mk[name] = e
+        if acc.get("best_damage", 0) > e["best_damage"]:
+            e["best_damage"] = acc.get("best_damage", 0)
+            e["ship_name"] = acc.get("ship_name", "")
+        mk[key] = e
 
 
 def _update_monthly_wopi(sd, ranked) -> None:
     m = sd.setdefault("monthly", {}).setdefault(month_str(), {})
     mw = m.setdefault(BOARD_WOPI, {})
     for acc in ranked:
-        name = acc.get("name", "未知")
-        e = mw.get(name)
+        key = acc.get("key") or acc.get("name")
+        if not key:
+            continue
+        e = mw.get(key)
         if e is None:
-            e = mw[name] = {"group_nickname": acc.get("group_nickname"), "battles": 0,
-                            "solo": 0, "div2": 0, "div3": 0, "ship_types": {}}
+            e = mw[key] = {"name": acc.get("name", "未知"), "group_nickname": acc.get("group_nickname"),
+                           "battles": 0, "solo": 0, "div2": 0, "div3": 0, "ship_types": {}}
+        e["name"] = acc.get("name", e["name"])  # 覆盖为最新游戏名
         e["group_nickname"] = acc.get("group_nickname")
         e["battles"] += acc.get("battles", 0)
         e["solo"] += acc.get("solo", 0)
@@ -627,6 +684,7 @@ register_board(
     build_html_fn=build_king_html,
     month_rank_fn=rank_monthly_king,
     build_month_fn=build_monthly_king_html,
+    month_rank_from_logs_fn=rank_king_monthly_from_logs,
     monthly_update_fn=_update_monthly_king,
     last_info_fn=_last_info_king,
     cmd_cn_view="窝王",
@@ -643,6 +701,7 @@ register_board(
     build_html_fn=build_wopi_html,
     month_rank_fn=rank_monthly_wopi,
     build_month_fn=build_monthly_wopi_html,
+    month_rank_from_logs_fn=rank_wopi_from_logs,
     monthly_update_fn=_update_monthly_wopi,
     last_info_fn=_last_info_wopi,
     cmd_cn_view="窝批",
