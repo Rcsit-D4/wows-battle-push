@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """战舰世界战绩结算自动推送插件（MaiBot）
 
 模块结构：
@@ -934,7 +934,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return await self._reply(stream_id, "本群尚未开启，请先 /wows on")
         binding["nl_enabled"] = value
         self._save_bindings()
-        return await self._reply(stream_id, f"已{'开启' if value else '关闭'}自然语言查询(beta)")
+        return await self._reply(stream_id, f"已{'开启' if value else '关闭'}自然语言查询")
 
     @Command("wows_nl", pattern=r"^/wows\s+nl\s+(?P<action>on|off)$")
     async def cmd_nl(self, **kwargs):
