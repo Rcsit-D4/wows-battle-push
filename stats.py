@@ -66,6 +66,8 @@ def detect_new_battles(
     - 老船（old 有）：差值 = new - old
     - 新船（old 无但 old 非空）：差值 = new 累计值；battles==1 正常播报，>1 只落盘不播报（历史遗留防刷屏）
     max_battles=None 返回所有新增（不限局数，供日志完整落盘），默认仅返回 1~max_battles 局（供播报）。"""
+    # 兼容旧快照：ship_id key 可能是字符串，统一转成整数
+    old = {int(k): v for k, v in old.items() if str(k).isdigit()}
     result: dict[int, dict[str, int]] = {}
     old_empty = not old
     for ship_id, n in new.items():
