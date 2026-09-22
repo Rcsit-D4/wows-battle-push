@@ -10,6 +10,7 @@
 import json
 import shutil
 from pathlib import Path
+from utils import atomic_write_json
 from typing import Any
 
 DATA_DIR = "data"
@@ -96,15 +97,4 @@ class StateStore:
 
     @staticmethod
     def _write(path: Path, data: Any, indent: bool = False) -> None:
-        """原子写入：先写临时文件再重命名，防止写入中断损坏"""
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            if indent:
-                text = json.dumps(data, ensure_ascii=False, indent=2)
-            else:
-                text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-            tmp.write_text(text, encoding="utf-8")
-            tmp.replace(path)
-        except Exception:  # noqa: BLE001
-            pass
+        atomic_write_json(path, data, indent)

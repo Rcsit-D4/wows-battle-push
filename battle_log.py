@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from utils import atomic_write_json
 
 BATTLE_LOG_FILE = "battle.json"
 
@@ -37,15 +38,7 @@ class BattleLogStore:
 
     def _save(self) -> None:
         """原子写入，防止写入中断导致文件损坏"""
-        try:
-            tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp_path.write_text(
-                json.dumps(self._data, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            tmp_path.replace(self._path)
-        except Exception:
-            pass
+        atomic_write_json(self._path, self._data)
 
     def add_record(self, record: dict[str, Any]) -> None:
         """添加一条战斗记录，按日期归档（标记脏，由 flush 统一写盘）"""

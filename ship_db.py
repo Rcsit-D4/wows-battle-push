@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+from utils import atomic_write_json
 from typing import Any
 
 SHIP_TYPE_CN: dict[str, str] = {
@@ -39,11 +40,7 @@ class ShipDb:
             self._db = {}
 
     def _save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(self._db, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
+        atomic_write_json(self._path, self._db)
 
     @property
     def loaded(self) -> bool:

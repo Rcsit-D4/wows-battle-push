@@ -473,10 +473,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             all_diffs = detect_new_battles(old, new_snap, max_battles=None)
             if not all_diffs:
                 continue
-            diffs = {k: v for k, v in all_diffs.items() if 0 < v.get("battles", 0) <= 5}
+            diffs = {k: v for k, v in all_diffs.items()
+                     if 0 < v.get("battles", 0) <= 5 and not v.get("_skip_broadcast")}
             results[bt] = list(diffs.values())
             if self._battle_log:
                 for ship_id, d in all_diffs.items():
+                    if d.get("_skip_broadcast"):
+                        continue  # 历史遗留船（新船 battles>1）不落盘，避免污染榜单和 nl 查询
                     self._battle_log.add_record({
                         "timestamp": time.time(),
                         "date": time.strftime("%Y-%m-%d"),
@@ -511,9 +514,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         display_name = self._get_display_name(stream_id, server, account_id, name)
                         text = format_battle(display_name, ship_name, d, bt, display_mode, extra)
                         if extra.get("record"):
-                            broken = check_career_records(old.get(ship_id) or {}, new_snap.get(ship_id) or {})
-                            if broken:
-                                text = text + "\n" + format_record_break(broken)
+                            old_ship = old.get(ship_id) or {}
+                            if old_ship:
+                                broken = check_career_records(old_ship, new_snap.get(ship_id) or {})
+                                if broken:
+                                    text = text + "\n" + format_record_break(broken)
                         await self._push_to_stream(text, stream_id)
 
         if new_types:

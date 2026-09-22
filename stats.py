@@ -61,12 +61,26 @@ def detect_new_battles(
     new: dict[int, dict[str, int]],
     max_battles: int | None = 5,
 ) -> dict[int, dict[str, int]]:
-    """对比新旧快照，返回有新增对局的船及其差值。旧快照不存在的船跳过；
+    """对比新旧快照，返回有新增对局的船及其差值。
+    - 首次绑定（old 为空）：所有船跳过，不报历史
+    - 老船（old 有）：差值 = new - old
+    - 新船（old 无但 old 非空）：差值 = new 累计值；battles==1 正常播报，>1 只落盘不播报（历史遗留防刷屏）
     max_battles=None 返回所有新增（不限局数，供日志完整落盘），默认仅返回 1~max_battles 局（供播报）。"""
     result: dict[int, dict[str, int]] = {}
+    old_empty = not old
     for ship_id, n in new.items():
         o = old.get(ship_id)
         if o is None:
+            if old_empty:
+                continue
+            d = _broadcast_fields(n)
+            b = d.get("battles", 0)
+            if b <= 0:
+                continue
+            if max_battles is None or b <= max_battles:
+                if b > 1:
+                    d["_skip_broadcast"] = True
+                result[ship_id] = d
             continue
         d = {k: n.get(k, 0) - o.get(k, 0) for k in set(n) | set(o)}
         d.update(_broadcast_fields(d))
