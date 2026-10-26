@@ -1,6 +1,6 @@
 # 榜单增删使用说明书（BOARDS.md）
 
-排行榜采用**注册表驱动**：所有榜单定义集中在 `wows_leaderboard.py` 的 `BOARDS` 注册表中。新增/删除一个榜单，**只需改 `wows_leaderboard.py` 一个文件**，以下内容全部自动生成，无需改动其他文件：
+排行榜采用**注册表驱动**：所有榜单定义集中在 `leaderboard.py` 的 `BOARDS` 注册表中。新增/删除一个榜单，**只需改 `leaderboard.py` 一个文件**，以下内容全部自动生成，无需改动其他文件：
 
 - 查看 / 历史 / 月榜 / 开关命令（中英文）
 - 排行榜帮助页（`/wows lbhelp`）中的命令条目
@@ -10,7 +10,7 @@
 
 ## 一、新增榜单
 
-在 `wows_leaderboard.py` 末尾（`register_board` 注册区）追加一段注册代码即可。
+在 `leaderboard.py` 末尾（`register_board` 注册区）追加一段注册代码即可。
 
 ### 1. 定义排名函数 rank_fn
 
@@ -129,7 +129,7 @@ register_board(
 
 ## 二、删除榜单
 
-在 `wows_leaderboard.py` 末尾删除该榜对应的 `register_board(...)` 调用块即可。
+在 `leaderboard.py` 末尾删除该榜对应的 `register_board(...)` 调用块即可。
 
 删除后：
 - 该榜的查看/历史/月榜/开关命令自动消失

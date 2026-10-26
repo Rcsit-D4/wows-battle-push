@@ -31,10 +31,10 @@ from typing import Any
 from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF, Command, MaiBotPlugin, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-from wows_api import WowsApi
-from wows_battle_log import BattleLogStore, extract_log_fields
-from wows_config import PluginConfig
-from wows_constants import (
+from api import WowsApi
+from battle_log import BattleLogStore, extract_log_fields
+from config import PluginConfig
+from constants import (
     EXTRA_ITEMS,
     MODE_TEXT,
     PUBLIC_COMMANDS,
@@ -43,14 +43,14 @@ from wows_constants import (
     VALID_BATTLE_TYPES,
     normalize_server,
 )
-from wows_nl_query import (
+from nl_query import (
     DEFAULT_ENABLED as NL_DEFAULT_ENABLED,
     TOOL_DESCRIPTION as NL_TOOL_DESCRIPTION,
     run_query,
 )
-from wows_ship_db import ShipDb
-from wows_state_store import StateStore
-from wows_cards import (
+from ship_db import ShipDb
+from state_store import StateStore
+from cards import (
     HELP_TEXT,
     ADMIN_HELP_TEXT,
     build_help_html,
@@ -58,8 +58,8 @@ from wows_cards import (
     build_status_html,
     build_list_html_pages,
 )
-import wows_leaderboard as leaderboard
-from wows_leaderboard import (
+import leaderboard
+from leaderboard import (
     PERIOD_DAILY,
     build_lbhelp_html,
     cmd_specs,
@@ -69,7 +69,7 @@ from wows_leaderboard import (
     month_str,
     parse_date,
 )
-from wows_stats import (
+from stats import (
     check_career_records,
     default_extra,
     detect_new_battles,
@@ -80,7 +80,7 @@ from wows_stats import (
     should_broadcast_type,
     summarize,
 )
-from wows_utils import send_html_image
+from utils import send_html_image
 
 # 手动检查只推当前群时，其他群的待补发事件保留时间与数量上限
 PENDING_TTL_SECONDS = 7 * 24 * 3600

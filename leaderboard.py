@@ -5,8 +5,8 @@ from datetime import date, timedelta
 from html import escape
 from typing import Any, Callable
 
-from wows_constants import KING_DAMAGE_TIE_THRESHOLD, RESERVED_BOARD_KEYS
-from wows_utils import bg_style, read_template
+from constants import KING_DAMAGE_TIE_THRESHOLD, RESERVED_BOARD_KEYS
+from utils import bg_style, read_template
 
 BOARD_KING = "king"
 BOARD_WOPI = "wopi"

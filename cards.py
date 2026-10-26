@@ -3,10 +3,10 @@
 
 from html import escape
 
-from wows_constants import EXTRA_ITEMS, MODE_TEXT
-from wows_stats import normalize_extra
-from wows_leaderboard import BOARDS, cmd_specs
-from wows_utils import bg_style, read_template
+from constants import EXTRA_ITEMS, MODE_TEXT
+from stats import normalize_extra
+from leaderboard import BOARDS, cmd_specs
+from utils import bg_style, read_template
 
 HELP_TEXT = (
     "===== 窝窝屎战绩推送 =====\n"

@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from wows_utils import atomic_write_json
+from utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 

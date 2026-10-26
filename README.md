@@ -92,17 +92,17 @@
 ```
 wows-battle-push/
 ├── plugin.py              插件主入口：生命周期、轮询、命令分发（榜单命令由注册表动态挂载）
-├── wows_leaderboard.py    榜单注册表（BOARDS）+ 排行榜实现 + 帮助自动生成
-├── wows_constants.py      常量：服务器、对局类型、额外播报项、公开命令
-├── wows_config.py         配置模型
-├── wows_api.py            Vortex API 客户端（图鉴/玩家查询）
-├── wows_stats.py          统计快照、差值检测、播报格式化
-├── wows_cards.py          help/status/list 图片卡片生成（榜单开关区自动生成）
-├── wows_battle_log.py     战斗日志存储与查询
-├── wows_nl_query.py       自然语言查询引擎（@bot 提问战绩）
-├── wows_ship_db.py        舰种图鉴本地缓存
-├── wows_state_store.py    状态文件存储与旧数据迁移
-├── wows_utils.py          模板读取、背景图、图片渲染发送
+├── leaderboard.py    榜单注册表（BOARDS）+ 排行榜实现 + 帮助自动生成
+├── constants.py      常量：服务器、对局类型、额外播报项、公开命令
+├── config.py         配置模型
+├── api.py            Vortex API 客户端（图鉴/玩家查询）
+├── stats.py          统计快照、差值检测、播报格式化
+├── cards.py          help/status/list 图片卡片生成（榜单开关区自动生成）
+├── battle_log.py     战斗日志存储与查询
+├── nl_query.py       自然语言查询引擎（@bot 提问战绩）
+├── ship_db.py        舰种图鉴本地缓存
+├── state_store.py    状态文件存储与旧数据迁移
+├── utils.py          模板读取、背景图、图片渲染发送
 ├── config.toml            运行时配置（Runner 自动生成）
 ├── _manifest.json         插件清单
 ├── assets/templates/*.html   图片卡片模板
@@ -113,4 +113,4 @@ wows-battle-push/
 
 ## 榜单扩展
 
-新增/删除排行榜请阅读 **`boards_help.md`**。核心：在 `wows_leaderboard.py` 注册一行，命令、排行榜帮助、管理员开关、status 状态、跨天结算全部自动生成。
+新增/删除排行榜请阅读 **`boards_help.md`**。核心：在 `leaderboard.py` 注册一行，命令、排行榜帮助、管理员开关、status 状态、跨天结算全部自动生成。

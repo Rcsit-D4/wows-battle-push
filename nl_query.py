@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """自然语言查询引擎：从战斗日志按玩家/舰种/指标汇总，返回可读文本"""
 
-from wows_ship_db import SHIP_TYPE_CN, SHIP_TYPE_EN, ShipDb
+from ship_db import SHIP_TYPE_CN, SHIP_TYPE_EN, ShipDb
 
 # 自然语言查询默认开关状态（管理员可随时通过命令关闭）
 DEFAULT_ENABLED = True

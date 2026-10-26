@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from wows_constants import BATTLE_TYPE_LABEL, EXTRA_ITEMS, EXTRA_KEY_ALIAS, EXTRA_SNAPSHOT_KEY
+from constants import BATTLE_TYPE_LABEL, EXTRA_ITEMS, EXTRA_KEY_ALIAS, EXTRA_SNAPSHOT_KEY
 
 
 def _int(v: Any) -> int:
@@ -130,7 +130,7 @@ def format_battle(
     """额外项每项一行，类型标签在最后。"""
     extra = extra or {}
     is_win = d.get("wins", 0) > d.get("losses", 0)
-    title = "喜报" if is_win else "悲报"
+    title = "悲报" if is_win else "喜报"
     battles = d.get("battles", 1)
     damage = d.get("damage", 0)
 
