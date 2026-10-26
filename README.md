@@ -107,7 +107,6 @@ wows-battle-push/
 ├── _manifest.json         插件清单
 ├── assets/templates/*.html   图片卡片模板
 ├── assets/images/            背景图（按页面名或通用 bg）
-├── tests/                    回归测试
 ├── README.md              本说明
 └── boards_help.md         榜单增删使用说明书
 ```

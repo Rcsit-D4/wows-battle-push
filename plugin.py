@@ -104,6 +104,22 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._last_snap_save: float = 0.0
         self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
         self._ship_db_ts: float = 0.0
+        # 每账号一把锁：保证"读基线 → 差分 → 落日志 → 推播报 → 更新基线"只跑一次。
+        # 手动检查与后台轮询共用同一把锁，避免同一次差分被写两遍日志/推两遍。
+        self._account_locks: dict[str, asyncio.Lock] = {}
+
+    # ---------- 账号级互斥 ----------
+    def _account_lock(self, server: str, account_id: int) -> asyncio.Lock:
+        key = f"{server.upper()}:{account_id}"
+        lock = self._account_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._account_locks[key] = lock
+        return lock
+
+    def _is_account_busy(self, server: str, account_id: int) -> bool:
+        lock = self._account_locks.get(f"{server.upper()}:{account_id}")
+        return bool(lock and lock.locked())
 
     # ---------- 权限 ----------
     def _get_sender_id(self, kwargs: dict[str, Any]) -> str:
@@ -590,7 +606,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             else:
                 changed = True
 
-        self._state["pending"] = kept
+        # 原地替换：drain 过程中可能有新事件入队，直接赋值会把这些新事件丢掉
+        pending[:] = kept
         if changed:
             self._save_pending()
 
@@ -615,10 +632,56 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             else:
                 changed = True
         if changed:
-            self._state["pending"] = kept
+            pending[:] = kept
             self._save_pending()
 
+    def _append_battle_record(
+        self, *, server: str, account_id: int, account_name: str,
+        battle_type: str, ship_id: int, diff: dict[str, Any],
+    ) -> None:
+        """战斗日志的唯一写入点：一次快照差分 → 一条日志记录。
+
+        手动检查、后台轮询、恢复刷新都只能经由这里落盘；调用方必须已持有该账号
+        的锁，保证同一次差分不会被写两遍（重复记录会让窝批榜场次翻倍）。
+        """
+        if not self._battle_log:
+            return
+        self._battle_log.add_record({
+            "timestamp": time.time(),
+            "date": time.strftime("%Y-%m-%d"),
+            "server": server.upper(),
+            "account_id": account_id,
+            "account_name": account_name,
+            "ship_id": ship_id,
+            "ship_name": self._ship_db.ship_name(ship_id) or f"Ship{ship_id}",
+            "battle_type": battle_type,
+            "battles": diff.get("battles", 0),
+            "wins": diff.get("wins", 0),
+            "losses": diff.get("losses", 0),
+            "damage": diff.get("damage", 0),
+            "kills": diff.get("kills", 0),
+            "xp": diff.get("xp", 0),
+            "potential": diff.get("potential", 0),
+            "scouting": diff.get("scouting", 0),
+            **extract_log_fields(diff),
+        })
+
     async def _check_account(
+        self, server: str, account_id: int, battle_types: list[str], push: bool,
+        stream_ids: set[str] | None = None, queue_others: bool = False,
+    ) -> dict[str, list]:
+        """账号级检测入口：加锁后执行一次"拉取 → 差分 → 落日志 → 推送"。
+
+        战斗日志只有 ``_check_account_locked`` 里这一个写入点，一次差分只落一次。
+        后台轮询与手动检查都走这里，因此不会各写一份。
+        """
+        async with self._account_lock(server, account_id):
+            return await self._check_account_locked(
+                server, account_id, battle_types, push,
+                stream_ids=stream_ids, queue_others=queue_others,
+            )
+
+    async def _check_account_locked(
         self, server: str, account_id: int, battle_types: list[str], push: bool,
         stream_ids: set[str] | None = None, queue_others: bool = False,
     ) -> dict[str, list]:
@@ -626,6 +689,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
         ``queue_others=True`` 用于手动检查：只立即推当前群，其他仍在监控该账号
         的群进入待补发队列，避免全局基线被提前消费导致它们永久漏播。
+
+        调用方必须已持有该账号的锁（见 ``_check_account``）。
         """
         snap_key = f"{server.upper()}:{account_id}"
         old_snap = self._state["snapshots"].get(snap_key) or {}
@@ -677,25 +742,10 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 for ship_id, d in all_diffs.items():
                     if d.get("_skip_broadcast"):
                         continue  # 历史遗留船（新船 battles>1）不落盘，避免污染榜单和 nl 查询
-                    self._battle_log.add_record({
-                        "timestamp": time.time(),
-                        "date": time.strftime("%Y-%m-%d"),
-                        "server": server.upper(),
-                        "account_id": account_id,
-                        "account_name": name,
-                        "ship_id": ship_id,
-                        "ship_name": self._ship_db.ship_name(ship_id) or f"Ship{ship_id}",
-                        "battle_type": bt,
-                        "battles": d.get("battles", 0),
-                        "wins": d.get("wins", 0),
-                        "losses": d.get("losses", 0),
-                        "damage": d.get("damage", 0),
-                        "kills": d.get("kills", 0),
-                        "xp": d.get("xp", 0),
-                        "potential": d.get("potential", 0),
-                        "scouting": d.get("scouting", 0),
-                        **extract_log_fields(d),
-                    })
+                    self._append_battle_record(
+                        server=server, account_id=account_id, account_name=name,
+                        battle_type=bt, ship_id=ship_id, diff=d,
+                    )
 
             if not push or not diffs:
                 continue
@@ -836,8 +886,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         return True, text, 1
 
     async def _reply_image(self, stream_id: str, html: str, fallback_text: str) -> tuple[bool, str, int]:
-        success, text, _ = await send_html_image(self.ctx, stream_id, html, fallback_text, self.ctx.logger)
-        return success, text, 1
+        return await send_html_image(self.ctx, stream_id, html, fallback_text, self.ctx.logger)
 
     async def _denied(self) -> tuple[bool, str, int]:
         return True, "", 1
@@ -1057,6 +1106,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
     @Command("wows_check", pattern=r"^/wows\s+check$")
     async def cmd_check(self, **kwargs):
+        """手动触发一次立即拉取（等价于本群账号此刻跑一轮轮询）。
+
+        本身不产生战斗日志：日志仍然由"快照差分"写入，且一次差分只写一次。
+        若后台轮询正在检查同一账号，这里直接跳过并提示，避免重复检测。
+        """
         stream_id = kwargs["stream_id"]
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
@@ -1064,9 +1118,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         await self._ensure_ship_db()
         enabled_types = self._enabled_types()
         has_new = False
+        busy: list[str] = []
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
             account_id = int(acc.get("account_id", 0))
+            if self._is_account_busy(server, account_id):
+                busy.append(f"{server} {account_id}")
+                continue
             try:
                 results = await self._check_account(
                     server, account_id, enabled_types, push=True,
@@ -1076,9 +1134,14 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                     has_new = True
             except Exception:  # noqa: BLE001
                 self.ctx.logger.exception("手动检查失败 %s:%s", server, account_id)
-        if not has_new:
-            return await self._reply(stream_id, "检查完成：当前无新对局")
-        return True, "", 1
+        if has_new:
+            return True, "", 1
+        if busy:
+            return await self._reply(
+                stream_id,
+                f"以下账号正在检查中，稍后会由这一轮结果自动播报：{'、'.join(busy)}",
+            )
+        return await self._reply(stream_id, "检查完成：当前无新对局")
 
     @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<nickname>.+))?$")
     async def cmd_nick(self, **kwargs):

@@ -93,11 +93,10 @@ def extract_image_data(result: Any) -> str:
 async def send_html_image(ctx, stream_id: str, html: str, fallback_text: str, logger=None) -> tuple[bool, str, int]:
     """渲染 HTML 为图片并发送，失败时降级为纯文本。"""
     try:
-        # full_page=True：卡片高度通常超过默认视口，不截全页会被裁切
-        result = await ctx.render.html2png(html=html, full_page=True)
+        result = await ctx.render.html2png(html=html)
         image_data = extract_image_data(result)
         await ctx.send.image(image_data=image_data, stream_id=stream_id)
-        return True, "", 1
+        return True, "", 0
     except Exception:
         if logger:
             logger.exception("图片渲染失败，降级为文本")
