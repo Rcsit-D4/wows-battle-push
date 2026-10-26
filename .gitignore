@@ -26,3 +26,8 @@ desktop.ini
 *.swo
 
 config.toml
+
+# 运行时/工具缓存
+logs/
+.ruff_cache/
+.pytest_cache/

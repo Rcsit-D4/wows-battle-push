@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from constants import ENCYCLOPEDIA_HEADERS, ENCYCLOPEDIA_URL, SERVER_VORTEX, VORTEX_HEADERS
+from wows_constants import ENCYCLOPEDIA_HEADERS, ENCYCLOPEDIA_URL, SERVER_VORTEX, VORTEX_HEADERS
 
 
 class WowsApi:

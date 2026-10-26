@@ -1,6 +1,6 @@
 # 榜单增删使用说明书（BOARDS.md）
 
-排行榜采用**注册表驱动**：所有榜单定义集中在 `leaderboard.py` 的 `BOARDS` 注册表中。新增/删除一个榜单，**只需改 `leaderboard.py` 一个文件**，以下内容全部自动生成，无需改动其他文件：
+排行榜采用**注册表驱动**：所有榜单定义集中在 `wows_leaderboard.py` 的 `BOARDS` 注册表中。新增/删除一个榜单，**只需改 `wows_leaderboard.py` 一个文件**，以下内容全部自动生成，无需改动其他文件：
 
 - 查看 / 历史 / 月榜 / 开关命令（中英文）
 - 排行榜帮助页（`/wows lbhelp`）中的命令条目
@@ -10,11 +10,11 @@
 
 ## 一、新增榜单
 
-在 `leaderboard.py` 末尾（`register_board` 注册区）追加一段注册代码即可。
+在 `wows_leaderboard.py` 末尾（`register_board` 注册区）追加一段注册代码即可。
 
 ### 1. 定义排名函数 rank_fn
 
-排行榜数据来自 `battle.json` 战斗日志（每场一条记录），按日读取后实时计算。
+排行榜数据来自 `data/battle.json` 战斗日志（每场一条记录），按日读取后实时计算。
 
 ```
 rank_fn(records, monitored_keys, get_nickname_fn=None, stream_id=None) -> 当日榜
@@ -55,7 +55,7 @@ register_board(
     # ---- 以下可选 ----
     month_rank_fn=my_month_rank_fn,   # 月榜排序（接收 monthly 数据）
     build_month_fn=my_build_month_fn, # 月榜 HTML
-    monthly_update_fn=my_monthly_update_fn,  # 跨天时更新月度统计 (sd, ranked)
+    monthly_update_fn=my_monthly_update_fn,  # 跨天时更新月度统计 (sd, ranked, month)
     last_info_fn=my_last_info_fn,            # 跨天时生成昨日信息 (ranked, date)
     supports_history=True,    # 是否支持历史查询 /wows xxx <日期>
     supports_month=True,      # 是否支持月榜 /wows xxx month
@@ -129,21 +129,21 @@ register_board(
 
 ## 二、删除榜单
 
-在 `leaderboard.py` 末尾删除该榜对应的 `register_board(...)` 调用块即可。
+在 `wows_leaderboard.py` 末尾删除该榜对应的 `register_board(...)` 调用块即可。
 
 删除后：
 - 该榜的查看/历史/月榜/开关命令自动消失
 - 排行榜帮助、管理员开关、status 状态页自动移除该榜
 - 跨天结算不再遍历该榜
 
-**残留数据说明**：`data.json` 的 `daily_king` 中可能残留该榜的 `enabled` / `last` / `history` / `monthly` 数据。这些数据**不会影响运行**（迁移与查询都只遍历当前注册的 `BOARDS`，查不到的 key 自然返回空），但若想彻底清理，可手动编辑 `data.json`，删除 `daily_king.<群>.enabled.<key>`、`daily_king.<群>.last.<key>`、`history` 与 `monthly` 中对应 key 的条目（操作前建议先备份）。
+**残留数据说明**：`data/leaderboard.json` 的 `daily_king` 中可能残留该榜的 `enabled` / `last` / `history` / `monthly` 数据。这些数据**不会影响运行**（迁移与查询都只遍历当前注册的 `BOARDS`，查不到的 key 自然返回空），但若想彻底清理，可手动编辑 `data/leaderboard.json`，删除 `daily_king.<群>.enabled.<key>`、`daily_king.<群>.last.<key>`、`history` 与 `monthly` 中对应 key 的条目（操作前建议先备份）。
 
 ## 三、注意事项
 
 1. **key 唯一且小写**：`key` 会拼进命令名与 pattern，改动后旧命令失效
 2. **注册顺序即展示顺序**：`BOARDS` 按 `register_board` 调用顺序遍历，帮助/status 按此顺序显示
-3. **排行榜只统计单场记录**：内置榜按 `battles == 1` 过滤（每条日志是一场的差值），自定义 rank_fn 如需排除多场叠加数据，注意同样过滤
-4. **跨天流程**：每日 0 点首次轮询时，对每个已开启的榜：读昨日日志 → `rank_fn` 排名 → 存 `history` → `monthly_update_fn` 更新月度 → `last_info_fn` 生成昨日信息 → `build_html_fn` 渲染推送 → 重置当日数据
+3. **单场/累计口径**：窝窝 king 榜只统计 `battles == 1` 的单场记录；窝批榜统计总场次（含合并记录）。自定义 rank_fn 如需排除多场叠加数据，注意自行过滤
+4. **跨天流程**：每日首次轮询时，对每个已开启的榜：读昨日日志 → `rank_fn` 排名 → 存 `history` → `monthly_update_fn` 更新月度 → `last_info_fn` 生成昨日信息 → `build_html_fn` 渲染推送 → 重置当日数据；停机多天时逐日补数据，不推送历史
 5. **月榜数据**：`monthly[month][key]` 由 `monthly_update_fn` 跨天累加，`month_rank_fn` 负责排序；如需月榜，三个函数（`month_rank_fn` / `build_month_fn` / `monthly_update_fn`）通常一起提供
 6. **图片背景**：背景图查找优先级为 `<key>_bg`（如 `king_bg.png`）→ 通用 `panel_bg` / `background` / `bg`；无图时用浅蓝渐变
-7. **改动后重启插件生效**；`data.json` / `battle.json` 无需迁移（内置旧格式自动兼容）
+7. **改动后重启插件生效**；`data/leaderboard.json` / `data/battle.json` 无需迁移（内置旧格式自动兼容）

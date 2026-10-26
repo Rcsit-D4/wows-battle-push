@@ -2,9 +2,13 @@
 """舰种数据库：从图鉴拉取并本地缓存 ship_id -> {name, type, tier}"""
 
 import json
+import logging
 from pathlib import Path
-from utils import atomic_write_json
 from typing import Any
+
+from wows_utils import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 SHIP_TYPE_CN: dict[str, str] = {
     "AirCarrier": "航母",
@@ -36,11 +40,12 @@ class ShipDb:
         try:
             if self._path.exists():
                 self._db = json.loads(self._path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.exception("读取舰种缓存失败，使用空缓存: %s", self._path)
             self._db = {}
 
-    def _save(self) -> None:
-        atomic_write_json(self._path, self._db)
+    def _save(self) -> bool:
+        return atomic_write_json(self._path, self._db)
 
     @property
     def loaded(self) -> bool:
@@ -57,7 +62,8 @@ class ShipDb:
         raw = await api.fetch_ship_catalog()
         if raw:
             self._db = raw
-            self._save()
+            if not self._save():
+                logger.error("舰种缓存落盘失败: %s", self._path)
         return len(self._db)
 
     def _entry(self, ship_id: Any) -> dict:

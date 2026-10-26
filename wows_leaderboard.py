@@ -5,14 +5,17 @@ from datetime import date, timedelta
 from html import escape
 from typing import Any, Callable
 
-from constants import KING_DAMAGE_TIE_THRESHOLD, RESERVED_BOARD_KEYS
-from utils import bg_style, read_template
+from wows_constants import KING_DAMAGE_TIE_THRESHOLD, RESERVED_BOARD_KEYS
+from wows_utils import bg_style, read_template
 
 BOARD_KING = "king"
 BOARD_WOPI = "wopi"
 PERIOD_DAILY = "daily"
 PERIOD_MONTHLY = "monthly"
 MONTHLY_SCORE = {1: 5, 2: 3, 3: 1}
+
+# 停机跨天时最多回填多少天，避免异常旧数据导致一次启动长时间扫描
+MAX_BACKFILL_DAYS = 366
 
 # 舰种称号：按总场次中玩得最多的舰种显示（潜艇未定义称号则不显示）
 SHIP_TITLE_MAP: dict[str, str] = {
@@ -83,7 +86,7 @@ def register_board(
     month_rank_fn=None,      # (monthly_data) -> 月榜（固定数据）
     build_month_fn=None,     # (ranked, month) -> 月榜 HTML
     month_rank_from_logs_fn=None,  # (records, monitored_keys, get_nickname_fn, stream_id) -> 当月实时月榜
-    monthly_update_fn=None,  # (sd, ranked) -> 跨天更新月度统计
+    monthly_update_fn=None,  # (sd, ranked, month) -> 跨天更新月度统计
     last_info_fn=None,       # (ranked, date) -> 昨日/底部信息 dict
     supports_history: bool = True,
     supports_month: bool = True,
@@ -157,12 +160,13 @@ def cmd_specs(key: str, board: dict) -> list[dict]:
 # ---------- 状态数据管理 ----------
 
 def _migrate_enabled(sd: dict) -> dict[str, bool]:
-    """enabled 字段迁移：旧格式为 bool(king)/xxx_enabled，统一为 {key: bool}"""
+    """enabled 字段迁移：旧格式为 bool(king)/xxx_enabled，统一为 {key: bool}。
+
+    只保留当前注册表中的榜单 key，避免已删除榜单的历史残留导致状态页 KeyError。
+    """
     enabled = sd.get("enabled")
     if isinstance(enabled, dict):
-        for key in BOARDS:
-            enabled.setdefault(key, False)
-        return enabled
+        return {key: bool(enabled.get(key, False)) for key in BOARDS}
     return {key: (bool(enabled) if key == BOARD_KING else bool(sd.get(f"{key}_enabled", False))) for key in BOARDS}
 
 
@@ -173,30 +177,35 @@ def _migrate_last(sd: dict) -> dict:
     for key, old in ((BOARD_KING, "last_king"), (BOARD_WOPI, "last_wopi")):
         if key in BOARDS and key not in last and sd.get(old):
             last[key] = sd[old]
-    return last
+    return {key: value for key, value in last.items() if key in BOARDS}
 
 
 def get_stream_data(state: dict, stream_id: str) -> dict:
-    """获取某群的排行榜状态，跨天自动重置当日数据"""
+    """获取某群的排行榜状态，只做字段补齐/迁移。
+
+    跨天结算由 ``check_daily_reset`` 统一负责；这里不能改 ``date``，否则命令
+    在 0 点后先执行时会抢先消费结算，导致昨日 history/月度/推送丢失。
+    """
     dk = state.setdefault("daily_king", {})
     sd = dk.get(stream_id)
-    today = today_str()
-    if sd is None or sd.get("date") != today:
-        prev = sd or {}
-        dk[stream_id] = {
-            "date": today,
-            "enabled": _migrate_enabled(prev),
-            "accounts": {}, "wopi_accounts": {},  # 旧字段，兼容旧数据跨天
-            "last": _migrate_last(prev),
-            "history": prev.get("history", {}),
-            "monthly": prev.get("monthly", {}),
+    if sd is None:
+        sd = {
+            "date": today_str(),
+            "enabled": _migrate_enabled({}),
+            "accounts": {}, "wopi_accounts": {},
+            "last": {}, "history": {}, "monthly": {},
         }
-    else:
-        sd["enabled"] = _migrate_enabled(sd)
-        sd["last"] = _migrate_last(sd)
-        sd.setdefault("history", {})
-        sd.setdefault("monthly", {})
-    return dk[stream_id]
+        dk[stream_id] = sd
+        return sd
+
+    sd["enabled"] = _migrate_enabled(sd)
+    sd["last"] = _migrate_last(sd)
+    sd.setdefault("date", today_str())
+    sd.setdefault("history", {})
+    sd.setdefault("monthly", {})
+    sd.setdefault("accounts", {})
+    sd.setdefault("wopi_accounts", {})
+    return sd
 
 
 # ---------- 排名（窝窝king / 窝批） ----------
@@ -378,8 +387,10 @@ def rank_monthly_wopi(data):
 
 # ---------- 月度统计更新与昨日信息 ----------
 
-def _update_monthly_king(sd, ranked) -> None:
-    m = sd.setdefault("monthly", {}).setdefault(month_str(), {})
+def _update_monthly_king(sd, ranked, month: str | None = None) -> None:
+    """把某日 king 榜前三计入指定月份（默认当前月）。"""
+    month_key = month or month_str()
+    m = sd.setdefault("monthly", {}).setdefault(month_key, {})
     mk = m.setdefault(BOARD_KING, {})
     rank_key_map = {1: "champion", 2: "runner_up", 3: "third"}
     for acc in ranked[:3]:
@@ -403,8 +414,10 @@ def _update_monthly_king(sd, ranked) -> None:
         mk[key] = e
 
 
-def _update_monthly_wopi(sd, ranked) -> None:
-    m = sd.setdefault("monthly", {}).setdefault(month_str(), {})
+def _update_monthly_wopi(sd, ranked, month: str | None = None) -> None:
+    """把某日 wopi 榜计入指定月份（默认当前月）。"""
+    month_key = month or month_str()
+    m = sd.setdefault("monthly", {}).setdefault(month_key, {})
     mw = m.setdefault(BOARD_WOPI, {})
     for acc in ranked:
         key = acc.get("key") or acc.get("name")
@@ -440,56 +453,105 @@ def _last_info_wopi(ranked, day) -> dict:
 # ---------- 跨天检查与推送 ----------
 
 async def check_daily_reset(state, ctx, send_image_fn, logger,
-                            get_records_fn=None, is_monitored_fn=None, get_nickname_fn=None) -> bool:
-    """跨天：对每个已开启的榜单推送昨日榜、保存历史、更新月度，并重置当日"""
-    today = today_str()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+                            get_records_fn=None, is_monitored_fn=None, get_nickname_fn=None,
+                            is_paused_fn=None, send_push: bool = True) -> bool:
+    """跨天结算：补 history / 月度，按需推送昨日榜。
+
+    规则：
+    - 正常跨天（只差一天）：结算昨日并推送昨日榜；
+    - 停机多天：逐日补 history / 月度，但不推送，避免恢复时刷屏；
+    - ``send_push=False`` 或群暂停：仍结算数据，只是不发送图片。
+    """
+    today = date.today()
+    today_iso = today.isoformat()
+    yesterday = today - timedelta(days=1)
     changed = False
+
     for stream_id, sd in list(state.get("daily_king", {}).items()):
-        if sd.get("date") == today:
+        if not isinstance(sd, dict):
             continue
-        # 停机/暂停多天恢复：跳过中间天的结算，从昨天开始
-        old_date = sd.get("date", "")
+        current = str(sd.get("date") or "").strip()
+        if current == today_iso:
+            continue
+
         try:
-            old_d = date.fromisoformat(old_date) if old_date else None
+            last_day = date.fromisoformat(current) if current else None
         except (TypeError, ValueError):
-            old_d = None
-        if old_d is None or old_d < date.today() - timedelta(days=1):
-            sd["date"] = yesterday
+            last_day = None
+
+        if last_day is None:
+            # 无法判断上次结算日：不猜测历史，直接对齐到今天
+            sd["date"] = today_iso
+            sd["enabled"] = _migrate_enabled(sd)
+            sd.setdefault("history", {})
+            sd.setdefault("monthly", {})
+            changed = True
+            continue
+
+        if last_day > yesterday:
+            # 今天/未来日期（异常数据）：不重复结算
+            sd["date"] = today_iso
+            changed = True
+            continue
+
+        days: list[date] = []
+        cursor = last_day
+        while cursor <= yesterday:
+            days.append(cursor)
+            cursor += timedelta(days=1)
+        if len(days) > MAX_BACKFILL_DAYS:
+            logger.warning("群 %s 跨天回填跨度 %d 天，超过上限 %d，仅处理最近部分",
+                           stream_id, len(days), MAX_BACKFILL_DAYS)
+            days = days[-MAX_BACKFILL_DAYS:]
+        is_backfill = len(days) > 1
+
         enabled = _migrate_enabled(sd)
         sd["enabled"] = enabled
-        for key, board in BOARDS.items():
-            if not enabled.get(key):
-                continue
-            ranked = None
-            if get_records_fn:
-                day_records = get_records_fn(stream_id, yesterday)
-                monitored = set()
-                if is_monitored_fn:
-                    for r in day_records:
-                        if is_monitored_fn(stream_id, r.get("server", ""), r.get("account_id", 0)):
-                            monitored.add(f"{r.get('server','')}:{r.get('account_id',0)}")
-                ranked = board["rank_fn"](day_records, monitored, get_nickname_fn, stream_id)
-            elif key == BOARD_KING:  # 兼容旧数据
-                ranked = rank_king(sd.get("accounts", {}))
-            elif key == BOARD_WOPI:
-                ranked = rank_wopi(sd.get("wopi_accounts", {}))
-            if not ranked:
-                continue
-            sd.setdefault("history", {}).setdefault(yesterday, {})[key] = ranked
-            if board.get("monthly_update_fn"):
-                board["monthly_update_fn"](sd, ranked)
-            last_info = board["last_info_fn"](ranked, yesterday) if board.get("last_info_fn") else None
-            if last_info:
-                sd.setdefault("last", {})[key] = last_info
-            try:
-                html = board["build_html_fn"](ranked, yesterday, last_info, PERIOD_DAILY)
-                await send_image_fn(ctx, stream_id, html, f"【{board['title_cn']} {yesterday}】详见图片", logger)
-            except Exception:  # noqa: BLE001
-                logger.exception("推送%s失败 stream=%s", board["title_cn"], stream_id)
-        sd["date"] = today
+        sd.setdefault("history", {})
+        sd.setdefault("monthly", {})
+        paused = bool(is_paused_fn and is_paused_fn(stream_id))
+
+        for day in days:
+            day_iso = day.isoformat()
+            for key, board in BOARDS.items():
+                if not enabled.get(key):
+                    continue
+                try:
+                    ranked = None
+                    if get_records_fn:
+                        day_records = get_records_fn(stream_id, day_iso)
+                        monitored = set()
+                        if is_monitored_fn:
+                            for r in day_records:
+                                if is_monitored_fn(stream_id, r.get("server", ""), r.get("account_id", 0)):
+                                    monitored.add(f"{r.get('server', '')}:{r.get('account_id', 0)}")
+                        ranked = board["rank_fn"](day_records, monitored, get_nickname_fn, stream_id)
+                    elif key == BOARD_KING:  # 兼容旧数据
+                        ranked = rank_king(sd.get("accounts", {}))
+                    elif key == BOARD_WOPI:
+                        ranked = rank_wopi(sd.get("wopi_accounts", {}))
+                    if not ranked:
+                        continue
+
+                    sd.setdefault("history", {}).setdefault(day_iso, {})[key] = ranked
+                    if board.get("monthly_update_fn"):
+                        board["monthly_update_fn"](sd, ranked, day_iso[:7])
+                    last_info = board["last_info_fn"](ranked, day_iso) if board.get("last_info_fn") else None
+                    if last_info:
+                        sd.setdefault("last", {})[key] = last_info
+
+                    # 停机回填只补数据；正常跨天且未暂停/未关闭推送时才发图
+                    if is_backfill or not send_push or paused:
+                        continue
+                    html = board["build_html_fn"](ranked, day_iso, last_info, PERIOD_DAILY)
+                    await send_image_fn(ctx, stream_id, html, f"【{board['title_cn']} {day_iso}】详见图片", logger)
+                except Exception:  # noqa: BLE001
+                    logger.exception("结算群 %s %s 的 %s 榜失败", stream_id, day_iso, board["title_cn"])
+
+        sd["date"] = today_iso
         sd["accounts"], sd["wopi_accounts"] = {}, {}
         changed = True
+
     return changed
 
 
@@ -647,7 +709,7 @@ def _board_help_rows() -> str:
     仅遍历英文命令规格（已内嵌中文别名），跳过中文规格与开关，避免重复"""
     rows = ""
     for key, board in BOARDS.items():
-        rows += f'<div class="cmd-item"><div class="cmd-left">'
+        rows += '<div class="cmd-item"><div class="cmd-left">'
         for spec in cmd_specs(key, board):
             if spec["action"] == "toggle" or spec["method"].startswith("cn_"):
                 continue

@@ -2,10 +2,15 @@
 """战斗日志存储：独立于 battle.json，按日期归档，为排行榜提供数据"""
 
 import json
+import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from utils import atomic_write_json
+
+from wows_utils import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 BATTLE_LOG_FILE = "battle.json"
 
@@ -33,12 +38,19 @@ class BattleLogStore:
         try:
             if self._path.exists():
                 self._data = json.loads(self._path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.exception("读取战斗日志失败，原文件将备份后使用空日志: %s", self._path)
             self._data = {}
+            try:
+                backup = self._path.with_suffix(self._path.suffix + f".corrupt-{int(time.time())}")
+                self._path.replace(backup)
+                logger.warning("损坏的战斗日志已备份到: %s", backup)
+            except Exception:  # noqa: BLE001
+                logger.exception("备份损坏战斗日志失败: %s", self._path)
 
-    def _save(self) -> None:
-        """原子写入，防止写入中断导致文件损坏"""
-        atomic_write_json(self._path, self._data)
+    def _save(self) -> bool:
+        """原子写入，防止写入中断导致文件损坏。"""
+        return atomic_write_json(self._path, self._data)
 
     def add_record(self, record: dict[str, Any]) -> None:
         """添加一条战斗记录，按日期归档（标记脏，由 flush 统一写盘）"""
@@ -47,11 +59,14 @@ class BattleLogStore:
         self._dirty = True
 
     def flush(self) -> None:
-        """把累积的记录一次性写盘（轮询结束调用，减少 IO）"""
+        """把累积的记录一次性写盘（轮询结束调用，减少 IO）。
+
+        写入失败时保留脏标记，下次轮询继续重试，避免静默丢日志。
+        """
         if not self._dirty:
             return
-        self._save()
-        self._dirty = False
+        if self._save():
+            self._dirty = False
 
     def get_by_date(self, date_str: str) -> list[dict]:
         return self._data.get("logs", {}).get(date_str, [])
@@ -75,7 +90,8 @@ class BattleLogStore:
                 removed += len(logs[date_key])
                 del logs[date_key]
         if removed > 0:
-            self._save()
+            self._dirty = True
+            self.flush()
         return removed
 
 

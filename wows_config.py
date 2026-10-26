@@ -8,9 +8,9 @@ class PushSection(PluginConfigBase):
     __ui_label__ = "战舰世界战绩推送"
 
     config_version: str = Field(default="1.0.0", description="配置版本号")
-    poll_interval_minutes: int = Field(default=5, ge=1, le=1440, description="轮询间隔（分钟）")
+    poll_interval_minutes: int = Field(default=3, ge=1, le=1440, description="轮询间隔（分钟）")
     enabled_battle_types: list[str] = Field(
-        default=["pvp_solo", "rank_solo"],
+        default=["pvp_solo", "pvp_div2", "pvp_div3", "rank_solo"],
         description="监控的对局类型：pvp_solo / rank_solo / pvp_div2 / pvp_div3 / pve",
     )
     push_enabled: bool = Field(default=True, description="是否自动推送新战绩")

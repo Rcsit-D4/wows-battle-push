@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """战舰世界战绩结算自动推送插件（MaiBot）
 
 模块结构：
@@ -31,10 +31,10 @@ from typing import Any
 from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF, Command, MaiBotPlugin, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-from api import WowsApi
-from battle_log import BattleLogStore, extract_log_fields
-from config import PluginConfig
-from constants import (
+from wows_api import WowsApi
+from wows_battle_log import BattleLogStore, extract_log_fields
+from wows_config import PluginConfig
+from wows_constants import (
     EXTRA_ITEMS,
     MODE_TEXT,
     PUBLIC_COMMANDS,
@@ -43,14 +43,14 @@ from constants import (
     VALID_BATTLE_TYPES,
     normalize_server,
 )
-from nl_query import (
+from wows_nl_query import (
     DEFAULT_ENABLED as NL_DEFAULT_ENABLED,
     TOOL_DESCRIPTION as NL_TOOL_DESCRIPTION,
     run_query,
 )
-from ship_db import ShipDb
-from state_store import StateStore
-from cards import (
+from wows_ship_db import ShipDb
+from wows_state_store import StateStore
+from wows_cards import (
     HELP_TEXT,
     ADMIN_HELP_TEXT,
     build_help_html,
@@ -58,8 +58,8 @@ from cards import (
     build_status_html,
     build_list_html_pages,
 )
-import leaderboard
-from leaderboard import (
+import wows_leaderboard as leaderboard
+from wows_leaderboard import (
     PERIOD_DAILY,
     build_lbhelp_html,
     cmd_specs,
@@ -69,7 +69,7 @@ from leaderboard import (
     month_str,
     parse_date,
 )
-from stats import (
+from wows_stats import (
     check_career_records,
     default_extra,
     detect_new_battles,
@@ -80,7 +80,12 @@ from stats import (
     should_broadcast_type,
     summarize,
 )
-from utils import send_html_image
+from wows_utils import send_html_image
+
+# 手动检查只推当前群时，其他群的待补发事件保留时间与数量上限
+PENDING_TTL_SECONDS = 7 * 24 * 3600
+MAX_PENDING_EVENTS = 500
+
 
 class WowsBattlePushPlugin(MaiBotPlugin):
     config_model = PluginConfig
@@ -88,10 +93,13 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     def __init__(self) -> None:
         super().__init__()
         self._api = WowsApi()
-        self._state: dict[str, Any] = {"version": 1, "bindings": {}, "snapshots": {}, "daily_king": {}}
+        self._state: dict[str, Any] = {
+            "version": 1, "bindings": {}, "snapshots": {}, "daily_king": {}, "pending": [],
+        }
         self._battle_log: BattleLogStore | None = None
         self._store: StateStore | None = None
         self._poller_task: asyncio.Task | None = None
+        self._ship_db_task: asyncio.Task | None = None
         self._stopped = False
         self._last_snap_save: float = 0.0
         self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
@@ -99,16 +107,45 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
     # ---------- 权限 ----------
     def _get_sender_id(self, kwargs: dict[str, Any]) -> str:
-        for key in ("sender_id", "user_id", "qq", "from_user_id", "from_user", "sender", "user"):
-            v = kwargs.get(key)
-            if v:
-                return str(v)
-        sender = kwargs.get("sender") or kwargs.get("user")
-        if isinstance(sender, dict):
-            for key in ("id", "qq", "user_id", "userid"):
-                v = sender.get(key)
-                if v:
-                    return str(v)
+        """从 Host 注入参数中提取发送者 QQ。
+
+        当前 Host 会直接传 ``user_id``；同时兼容文档中的 ``message`` 消息对象
+        以及旧版本可能传入的 ``sender`` / ``from_user`` 等字段。
+        """
+        candidates: list[Any] = [
+            kwargs.get("sender_id"),
+            kwargs.get("user_id"),
+            kwargs.get("qq"),
+            kwargs.get("from_user_id"),
+            kwargs.get("from_user"),
+            kwargs.get("sender"),
+            kwargs.get("user"),
+        ]
+
+        message = kwargs.get("message")
+        if isinstance(message, dict):
+            message_info = message.get("message_info")
+            if isinstance(message_info, dict):
+                user_info = message_info.get("user_info")
+                if isinstance(user_info, dict):
+                    candidates.extend([user_info.get("user_id"), user_info.get("id"), user_info.get("qq")])
+            candidates.extend([message.get("user_id"), message.get("sender_id")])
+            sender = message.get("sender") or message.get("user")
+            if isinstance(sender, dict):
+                candidates.extend([sender.get("id"), sender.get("qq"), sender.get("user_id")])
+
+        raw_message = kwargs.get("raw_message")
+        if isinstance(raw_message, dict):
+            candidates.extend([raw_message.get("user_id"), raw_message.get("sender_id")])
+
+        for value in candidates:
+            if isinstance(value, dict):
+                for key in ("user_id", "id", "qq", "userid"):
+                    nested = value.get(key)
+                    if nested:
+                        return str(nested)
+            elif value:
+                return str(value)
         return ""
 
     def _is_admin(self, sender_id: str) -> bool:
@@ -181,6 +218,15 @@ class WowsBattlePushPlugin(MaiBotPlugin):
     def _is_account_monitored(self, stream_id: str, server: str, account_id: int) -> bool:
         return self._find_account(stream_id, server, account_id) is not None
 
+    def _is_stream_paused(self, stream_id: str) -> bool:
+        """未知聊天流按暂停处理；暂停群只停推送，不停结算。"""
+        binding = self._get_binding(stream_id)
+        return not binding or bool(binding.get("paused"))
+
+    def _is_stream_active_for_account(self, stream_id: str, server: str, account_id: int) -> bool:
+        """该 stream 当前是否仍应接收此账号的普通播报。"""
+        return not self._is_stream_paused(stream_id) and self._is_account_monitored(stream_id, server, account_id)
+
     def _monitored_keys(self, stream_id: str) -> set[str]:
         binding = self._get_binding(stream_id)
         if not binding:
@@ -198,17 +244,18 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self.ctx.logger.info("插件已加载，绑定群数=%d，榜单=%s",
                              len(self._state["bindings"]), list(leaderboard.BOARDS.keys()))
         self._last_snap_save = time.time()
-        asyncio.create_task(self._ensure_ship_db())
+        self._ship_db_task = asyncio.create_task(self._ensure_ship_db())
         self._poller_task = asyncio.create_task(self._poller_loop())
 
     async def on_unload(self) -> None:
         self._stopped = True
-        if self._poller_task:
-            self._poller_task.cancel()
-            try:
-                await self._poller_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+        for task in (self._poller_task, self._ship_db_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         if self._battle_log:
             self._battle_log.flush()
         self._save_state()
@@ -224,6 +271,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         "wows_query",
         brief_description="查询战舰世界战绩统计（本群绑定玩家）",
         detailed_description=NL_TOOL_DESCRIPTION,
+        core_tool=True,
         parameters=[
             ToolParameterInfo(
                 name="player", param_type=ToolParamType.STRING,
@@ -323,16 +371,22 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             self._state["bindings"] = self._store.groups.get("bindings", {})
             self._state["snapshots"] = self._store.snapshots
             self._state["daily_king"] = self._store.leaderboard
+            self._state["pending"] = self._store.pending
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("读取状态文件失败，使用空状态")
 
     def _save_state(self) -> None:
-        """退出时全量保存三个数据文件"""
+        """退出时全量保存数据文件"""
         try:
             self._sync_store()
-            self._store.save_groups()
-            self._store.save_snapshots()
-            self._store.save_leaderboard()
+            for name, ok in (
+                ("群配置", self._store.save_groups()),
+                ("快照", self._store.save_snapshots()),
+                ("榜单", self._store.save_leaderboard()),
+                ("待补发事件", self._store.save_pending()),
+            ):
+                if not ok:
+                    self.ctx.logger.error("保存%s失败", name)
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("保存状态文件失败")
 
@@ -341,25 +395,37 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._store.groups["bindings"] = self._state["bindings"]
         self._store.snapshots = self._state["snapshots"]
         self._store.leaderboard = self._state["daily_king"]
+        self._store.pending = self._state["pending"]
+
+    def _save_pending(self) -> None:
+        try:
+            self._store.pending = self._state["pending"]
+            if not self._store.save_pending():
+                self.ctx.logger.error("保存待补发事件失败")
+        except Exception:  # noqa: BLE001
+            self.ctx.logger.exception("保存待补发事件失败")
 
     def _save_bindings(self) -> None:
         try:
             self._store.groups["bindings"] = self._state["bindings"]
-            self._store.save_groups()
+            if not self._store.save_groups():
+                self.ctx.logger.error("保存群配置失败")
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("保存群配置失败")
 
     def _save_snapshots(self) -> None:
         try:
             self._store.snapshots = self._state["snapshots"]
-            self._store.save_snapshots()
+            if not self._store.save_snapshots():
+                self.ctx.logger.error("保存快照失败")
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("保存快照失败")
 
     def _save_leaderboard(self) -> None:
         try:
             self._store.leaderboard = self._state["daily_king"]
-            self._store.save_leaderboard()
+            if not self._store.save_leaderboard():
+                self.ctx.logger.error("保存榜单数据失败")
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("保存榜单数据失败")
 
@@ -406,15 +472,25 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
     async def _poll_once(self) -> None:
         try:
-            if not self.config.plugin.push_enabled:
-                return
+            # 跨天结算与推送开关解耦：暂停/关闭推送时仍要补 history 与月度
             if await leaderboard.check_daily_reset(
                 self._state, self.ctx, send_html_image, self.ctx.logger,
                 get_records_fn=lambda sid, d: self._battle_log.get_by_date(d) if self._battle_log else [],
                 is_monitored_fn=self._is_account_monitored,
                 get_nickname_fn=self._get_group_nickname,
+                is_paused_fn=self._is_stream_paused,
+                send_push=self.config.plugin.push_enabled,
             ):
                 self._save_leaderboard()
+
+            if not self.config.plugin.push_enabled:
+                # 关闭推送期间不保留待补发，避免重新开启时补发旧战绩
+                if self._pending_events():
+                    self._state["pending"] = []
+                    self._save_pending()
+                return
+
+            await self._drain_pending()
             await self._ensure_ship_db()
             accounts = self._unique_accounts()
             if not accounts:
@@ -444,31 +520,151 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 self._save_snapshots()
                 self._last_snap_save = time.time()
 
+    # ---------- 待补发事件（手动检查只推当前群时，其他群稍后补收） ----------
+    def _pending_events(self) -> list[dict[str, Any]]:
+        pending = self._state.get("pending")
+        if not isinstance(pending, list):
+            pending = []
+            self._state["pending"] = pending
+        return pending
+
+    def _enqueue_pending(self, event: dict[str, Any], stream_ids: set[str] | list[str]) -> None:
+        streams = {str(stream_id) for stream_id in stream_ids if stream_id}
+        if not streams:
+            return
+        pending = self._pending_events()
+        event_id = str(event.get("id") or "")
+        for existing in pending:
+            if not isinstance(existing, dict):
+                continue
+            if event_id and existing.get("id") == event_id:
+                existing_streams = {str(s) for s in (existing.get("pending_streams") or []) if s}
+                existing_streams.update(streams)
+                existing["pending_streams"] = sorted(existing_streams)
+                self._save_pending()
+                return
+        payload = dict(event)
+        payload["pending_streams"] = sorted(streams)
+        payload.setdefault("created", time.time())
+        pending.append(payload)
+        if len(pending) > MAX_PENDING_EVENTS:
+            del pending[:-MAX_PENDING_EVENTS]
+        self._save_pending()
+
+    async def _drain_pending(self) -> None:
+        """把待补发事件发送给后来恢复/仍在监控的群；暂停或移除的群直接丢弃。"""
+        pending = self._pending_events()
+        if not pending:
+            return
+        now = time.time()
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for event in pending:
+            if not isinstance(event, dict):
+                changed = True
+                continue
+            try:
+                created = float(event.get("created", 0) or 0)
+                server = str(event.get("server", "")).upper()
+                account_id = int(event.get("account_id", 0))
+            except (TypeError, ValueError):
+                changed = True
+                continue
+            if now - created > PENDING_TTL_SECONDS:
+                changed = True
+                continue
+
+            streams = {str(s) for s in (event.get("pending_streams") or []) if s}
+            remaining: list[str] = []
+            for stream_id in sorted(streams):
+                if not self._is_stream_active_for_account(stream_id, server, account_id):
+                    changed = True
+                    continue
+                ok = await self._push_event_to_stream(event, stream_id)
+                changed = True
+                if not ok:
+                    remaining.append(stream_id)
+            if remaining:
+                event["pending_streams"] = sorted(set(remaining))
+                kept.append(event)
+            else:
+                changed = True
+
+        self._state["pending"] = kept
+        if changed:
+            self._save_pending()
+
+    def _drop_pending_for_stream(self, stream_id: str) -> None:
+        """暂停/移除群时丢弃其待补发事件，恢复后不补旧战绩。"""
+        pending = self._pending_events()
+        if not pending:
+            return
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for event in pending:
+            if not isinstance(event, dict):
+                changed = True
+                continue
+            streams = {str(s) for s in (event.get("pending_streams") or []) if s}
+            if stream_id in streams:
+                streams.discard(stream_id)
+                changed = True
+            if streams:
+                event["pending_streams"] = sorted(streams)
+                kept.append(event)
+            else:
+                changed = True
+        if changed:
+            self._state["pending"] = kept
+            self._save_pending()
+
     async def _check_account(
         self, server: str, account_id: int, battle_types: list[str], push: bool,
-        stream_ids: set[str] | None = None,
+        stream_ids: set[str] | None = None, queue_others: bool = False,
     ) -> dict[str, list]:
-        """拉取账号各对局类型快照，检测新对局、存战斗日志、按需推送"""
+        """拉取账号各对局类型快照，检测新对局、存战斗日志、按需推送。
+
+        ``queue_others=True`` 用于手动检查：只立即推当前群，其他仍在监控该账号
+        的群进入待补发队列，避免全局基线被提前消费导致它们永久漏播。
+        """
         snap_key = f"{server.upper()}:{account_id}"
         old_snap = self._state["snapshots"].get(snap_key) or {}
-        old_types = old_snap.get("battle_types") or {}
-        new_types: dict[str, dict[int, dict[str, int]]] = {}
+
+        # 旧快照从 JSON 加载后舰船 key 是字符串，统一转 int，保证 record 检测可用
+        old_types: dict[str, dict[int, dict[str, int]]] = {}
+        for bt, ships in (old_snap.get("battle_types") or {}).items():
+            if not isinstance(ships, dict):
+                continue
+            old_types[bt] = {
+                int(ship_id): stats for ship_id, stats in ships.items() if str(ship_id).isdigit()
+            }
+
+        # 以旧快照为基底：某个类型拉取失败/返回空时保留旧基线，不能整体覆盖
+        new_types: dict[str, dict[int, dict[str, int]]] = {
+            bt: dict(ships) for bt, ships in old_types.items()
+        }
         name = old_snap.get("name") or f"Account{account_id}"
         results: dict[str, list] = {}
+        failed_types: list[str] = []
 
         for bt in battle_types:
             try:
-                name, stats = await self._api.fetch_user_ships(server, account_id, bt)
+                fetched_name, stats = await self._api.fetch_user_ships(server, account_id, bt)
             except Exception:  # noqa: BLE001
-                self.ctx.logger.warning("拉取 %s:%s %s 失败，跳过", server, account_id, bt)
+                failed_types.append(bt)
+                self.ctx.logger.warning("拉取 %s:%s %s 失败，保留旧基线", server, account_id, bt)
                 continue
             new_snap = summarize(stats)
             if not new_snap:
-                # API 返回空时保留旧快照，避免清空历史基线导致漏播
+                failed_types.append(bt)
+                self.ctx.logger.debug("拉取 %s:%s %s 返回空，保留旧基线", server, account_id, bt)
                 continue
+            if fetched_name and fetched_name != f"Account{account_id}":
+                name = fetched_name
             new_types[bt] = new_snap
             old = old_types.get(bt) or {}
             if not old:
+                # 首次建立该类型基线：不播报历史战绩
                 continue
             all_diffs = detect_new_battles(old, new_snap, max_battles=None)
             if not all_diffs:
@@ -476,6 +672,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             diffs = {k: v for k, v in all_diffs.items()
                      if 0 < v.get("battles", 0) <= 5 and not v.get("_skip_broadcast")}
             results[bt] = list(diffs.values())
+
             if self._battle_log:
                 for ship_id, d in all_diffs.items():
                     if d.get("_skip_broadcast"):
@@ -499,27 +696,38 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         "scouting": d.get("scouting", 0),
                         **extract_log_fields(d),
                     })
-            if push:
-                streams = stream_ids if stream_ids is not None else self._streams_for_account(server, account_id)
-                for ship_id, d in diffs.items():
-                    ship_name = self._ship_db.ship_name(ship_id) or f"Ship{ship_id}"
-                    for stream_id in streams:
-                        display_mode = self._get_display_mode(stream_id)
-                        if not should_broadcast_type(bt, display_mode):
-                            continue
-                        low, high = self._get_damage_range(stream_id)
-                        if not should_broadcast_damage(d["damage"], low, high):
-                            continue
-                        extra = self._get_extra(stream_id)
-                        display_name = self._get_display_name(stream_id, server, account_id, name)
-                        text = format_battle(display_name, ship_name, d, bt, display_mode, extra)
-                        if extra.get("record"):
-                            old_ship = old.get(ship_id) or {}
-                            if old_ship:
-                                broken = check_career_records(old_ship, new_snap.get(ship_id) or {})
-                                if broken:
-                                    text = text + "\n" + format_record_break(broken)
-                        await self._push_to_stream(text, stream_id)
+
+            if not push or not diffs:
+                continue
+
+            streams = set(stream_ids) if stream_ids is not None else set(self._streams_for_account(server, account_id))
+            for ship_id, d in diffs.items():
+                old_ship = old.get(ship_id) or {}
+                broken = check_career_records(old_ship, new_snap.get(ship_id) or {}) if old_ship else []
+                event = {
+                    "id": f"{time.time_ns()}:{server.upper()}:{account_id}:{bt}:{ship_id}",
+                    "created": time.time(),
+                    "server": server.upper(),
+                    "account_id": account_id,
+                    "account_name": name,
+                    "ship_id": ship_id,
+                    "ship_name": self._ship_db.ship_name(ship_id) or f"Ship{ship_id}",
+                    "battle_type": bt,
+                    "diff": d,
+                    "broken": broken,
+                }
+                sent = await self._broadcast_event(event, streams)
+                failed = {stream_id for stream_id, ok in sent.items() if not ok}
+                if failed:
+                    self._enqueue_pending(event, failed)
+                if queue_others and stream_ids is not None:
+                    others = set(self._streams_for_account(server, account_id)) - streams
+                    if others:
+                        self._enqueue_pending(event, others)
+
+        if failed_types:
+            self.ctx.logger.debug("账号 %s:%s 以下类型未更新基线: %s",
+                                  server, account_id, ", ".join(failed_types))
 
         if new_types:
             # 内存基线始终更新（保持最新）；仅在有新对局或改名时写盘，避免每次轮询全量写入大快照
@@ -545,7 +753,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             name = self._state.get("snapshots", {}).get(snap_key, {}).get("name") or f"Account{account_id}"
             for bt in enabled_types:
                 try:
-                    name, stats = await self._api.fetch_user_ships(server, account_id, bt)
+                    fetched_name, stats = await self._api.fetch_user_ships(server, account_id, bt)
                 except Exception:  # noqa: BLE001
                     self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
                     continue
@@ -553,20 +761,74 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                 if not snap:
                     # 空结果保留旧基线，避免清空导致首轮漏播
                     continue
+                if fetched_name and fetched_name != f"Account{account_id}":
+                    name = fetched_name
                 new_types[bt] = snap
             if new_types:
-                old_types = dict(self._state.get("snapshots", {}).get(snap_key, {}).get("battle_types") or {})
+                old_types: dict[str, dict[int, dict[str, int]]] = {}
+                for bt, ships in (self._state.get("snapshots", {}).get(snap_key, {}).get("battle_types") or {}).items():
+                    if isinstance(ships, dict):
+                        old_types[bt] = {
+                            int(ship_id): stats for ship_id, stats in ships.items() if str(ship_id).isdigit()
+                        }
                 old_types.update(new_types)
                 self._state["snapshots"][snap_key] = {
                     "name": name, "battle_types": old_types, "updated": time.time()
                 }
         self._save_snapshots()
 
-    async def _push_to_stream(self, text: str, stream_id: str) -> None:
+    async def _broadcast_event(self, event: dict[str, Any], stream_ids: set[str] | list[str]) -> dict[str, bool]:
+        """按 stream 逐个应用显示模式/伤害范围/额外项并发送，返回每个 stream 是否成功。"""
+        results: dict[str, bool] = {}
+        for stream_id in stream_ids:
+            results[stream_id] = await self._push_event_to_stream(event, stream_id)
+        return results
+
+    async def _push_event_to_stream(self, event: dict[str, Any], stream_id: str) -> bool:
+        battle_type = str(event.get("battle_type", ""))
+        diff = event.get("diff") or {}
+        if not isinstance(diff, dict):
+            return True
+        display_mode = self._get_display_mode(stream_id)
+        if not should_broadcast_type(battle_type, display_mode):
+            return True
+        low, high = self._get_damage_range(stream_id)
+        if not should_broadcast_damage(int(diff.get("damage", 0)), low, high):
+            return True
+        extra = self._get_extra(stream_id)
+        display_name = self._get_display_name(
+            stream_id,
+            str(event.get("server", "")),
+            int(event.get("account_id", 0)),
+            str(event.get("account_name") or ""),
+        )
+        text = format_battle(
+            display_name,
+            str(event.get("ship_name") or ""),
+            diff,
+            battle_type,
+            display_mode,
+            extra,
+        )
+        broken = event.get("broken") or []
+        if extra.get("record") and isinstance(broken, list):
+            broken_items: list[tuple[str, int, int]] = []
+            for item in broken:
+                try:
+                    broken_items.append((str(item[0]), int(item[1]), int(item[2])))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            if broken_items:
+                text = text + "\n" + format_record_break(broken_items)
+        return await self._push_to_stream(text, stream_id)
+
+    async def _push_to_stream(self, text: str, stream_id: str) -> bool:
         try:
-            await self.ctx.send.text(text, stream_id)
+            result = await self.ctx.send.text(text, stream_id)
+            return result is not False
         except Exception:  # noqa: BLE001
             self.ctx.logger.exception("推送失败 stream=%s", stream_id)
+            return False
 
     # ---------- 命令 ----------
     async def _reply(self, stream_id: str, text: str) -> tuple[bool, str, int]:
@@ -574,10 +836,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         return True, text, 1
 
     async def _reply_image(self, stream_id: str, html: str, fallback_text: str) -> tuple[bool, str, int]:
-        return await send_html_image(self.ctx, stream_id, html, fallback_text, self.ctx.logger)
+        success, text, _ = await send_html_image(self.ctx, stream_id, html, fallback_text, self.ctx.logger)
+        return success, text, 1
 
     async def _denied(self) -> tuple[bool, str, int]:
-        return True, "", 0
+        return True, "", 1
 
     @Command("wows_help", pattern=r"^/wows(\s+help)?$")
     async def cmd_help(self, **kwargs):
@@ -637,6 +900,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return await self._reply(stream_id, "服务已暂停")
         binding["paused"] = True
         self._save_bindings()
+        self._drop_pending_for_stream(stream_id)
         return await self._reply(stream_id, "已暂停战绩推送，/wows on 可恢复")
 
     @Command("wows_add", pattern=r"^/wows\s+add\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<me>me))?$")
@@ -749,7 +1013,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         pages = build_list_html_pages(binding, self._state.get("snapshots", {}))
         for idx, html in enumerate(pages):
             await self._reply_image(stream_id, html, fallback if idx == 0 else "")
-        return True, "", len(pages)
+        return True, "", 1
 
     @Command("wows_status", pattern=r"^/wows\s+status$")
     async def cmd_status(self, **kwargs):
@@ -805,15 +1069,16 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             account_id = int(acc.get("account_id", 0))
             try:
                 results = await self._check_account(
-                    server, account_id, enabled_types, push=True, stream_ids={stream_id}
+                    server, account_id, enabled_types, push=True,
+                    stream_ids={stream_id}, queue_others=True,
                 )
                 if any(results.values()):
                     has_new = True
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 self.ctx.logger.exception("手动检查失败 %s:%s", server, account_id)
         if not has_new:
             return await self._reply(stream_id, "检查完成：当前无新对局")
-        return True, "", 0
+        return True, "", 1
 
     @Command("wows_nick", pattern=r"^/wows\s+nick\s+(?P<server>\S+)\s+(?P<account>\S+)(?:\s+(?P<nickname>.+))?$")
     async def cmd_nick(self, **kwargs):

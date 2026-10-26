@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """自然语言查询引擎：从战斗日志按玩家/舰种/指标汇总，返回可读文本"""
 
-from typing import Any
-
-from ship_db import SHIP_TYPE_CN, SHIP_TYPE_EN, ShipDb
+from wows_ship_db import SHIP_TYPE_CN, SHIP_TYPE_EN, ShipDb
 
 # 自然语言查询默认开关状态（管理员可随时通过命令关闭）
 DEFAULT_ENABLED = True
@@ -56,7 +54,7 @@ def normalize_ship_type(ship_type: str, ship_db: ShipDb) -> str | None:
         return None
     if t in SHIP_TYPE_EN:
         return SHIP_TYPE_EN[t]
-    if t in SHIP_TYPE_CN.values():
+    if t in SHIP_TYPE_CN:
         return t
     # 常见说法兜底
     fuzzy = {
@@ -170,6 +168,10 @@ def _run_query_impl(
         return f"没有在当前群绑定列表中找到与「{player}」匹配的账号。"
 
     filtered = _filter_by_ship_type(records, ship_db, st)
+    if player and matched:
+        # 同一昵称可能匹配多个账号：先收敛到匹配账号，避免退化成“全群排行”
+        matched_ids = {a.get("account_id") for a in matched}
+        filtered = [r for r in filtered if r.get("account_id") in matched_ids]
     if not filtered:
         label = f"舰种「{SHIP_TYPE_CN.get(st, st)}」" if st else "该舰种"
         return f"该条件下（{label}）没有战斗记录。"

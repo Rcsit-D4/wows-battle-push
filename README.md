@@ -23,10 +23,11 @@
 | 配置项 | 说明 | 默认 |
 |---|---|---|
 | `poll_interval_minutes` | 轮询检测间隔（分钟） | 3 |
+| `poll_concurrency` | 每轮并发拉取的账号数 | 6 |
 | `enabled_battle_types` | 监控的对局类型 | pvp_solo/div2/div3/rank_solo |
 | `push_enabled` | 是否自动推送 | true |
 | `admin_qq` | 管理员 QQ 白名单 | 需自行填写 |
-| `log_retention_days` | 战斗日志保留天数 | 30 |
+| `log_retention_days` | 战斗日志保留天数（当前版本暂未自动清理） | 30 |
 
 对局类型：`pvp_solo`(单野) `pvp_div2`(双排) `pvp_div3`(三排) `rank_solo`(排位) `pve`(人机)
 
@@ -39,7 +40,7 @@
 | `/wows help` | `/帮助` | 帮助 |
 | `/wows lbhelp` | `/排行榜帮助` | 排行榜命令帮助 |
 | `/wows add <服务器> <ID> [me]` | `/添加` | 添加播报账号（ID 可为数字 UID 或昵称；末尾加 `me` 绑定本人QQ） |
-| `/wows remove <服务器> <ID>` | `/移除` | 移除播报账号 |
+| `/wows remove <服务器> <ID或昵称>` | `/移除` | 移除播报账号 |
 | `/wows list` | `/列表` | 查看监控列表 |
 | `/wows check` | `/检查` | 立即检查推送 |
 | `/wows king` / `/窝王` | — | 查看本日窝窝king榜 |
@@ -74,36 +75,43 @@
 
 ## 数据文件
 
+运行数据位于插件目录的 `data/`，由插件自动创建；`config.toml` 也由 Runner 在首次加载时生成，不需要手工提交到仓库。
+
 | 文件 | 内容 | 说明 |
 |---|---|---|
-| `data.json` | 群绑定、战舰快照、榜单状态 | 旧格式自动迁移 |
-| `battle.json` | 战斗日志（按日期归档） | 排行榜数据源，超过保留天数自动清理 |
+| `data/groups.json` | 群绑定、账号、昵称、显示模式、额外项 | 群配置 |
+| `data/snapshots.json` | 每账号各对局类型的舰船快照 | 新对局检测基线 |
+| `data/leaderboard.json` | 每群榜单开关、last、history、monthly | 榜单数据 |
+| `data/battle.json` | 战斗日志（按日期归档） | 排行榜与 NL 查询数据源 |
+| `data/pending.json` | 手动检查只推当前群时的待补发事件 | 最多保留 7 天/500 条 |
 
-`data.json` 结构：`version` / `bindings`（群→账号列表）/ `snapshots`（每账号各舰快照）/ `daily_king`（每群榜单状态：enabled 开关、last 昨日、history 历史、monthly 月度）
+旧版根目录 `data.json` 会自动迁移到 `data/`。
 
 ## 文件结构
 
 ```
 wows-battle-push/
-├── plugin.py        插件主入口：生命周期、轮询、命令分发（榜单命令由注册表动态挂载）
-├── leaderboard.py   榜单注册表（BOARDS）+ 排行榜实现 + 帮助自动生成
-├── constants.py     常量：服务器、对局类型、额外播报项、公开命令
-├── config.py        配置模型
-├── api.py           Vortex API 客户端（图鉴/玩家查询）
-├── stats.py         统计快照、差值检测、播报格式化
-├── cards.py         help/status/list 图片卡片生成（榜单开关区自动生成）
-├── battle_log.py    战斗日志存储与查询
-├── nl_query.py      自然语言查询引擎（@bot 提问战绩）
-├── ship_db.py       舰种图鉴本地缓存
-├── utils.py         模板读取、背景图、图片渲染发送
-├── config.toml      插件配置
-├── _manifest.json   插件清单
+├── plugin.py              插件主入口：生命周期、轮询、命令分发（榜单命令由注册表动态挂载）
+├── wows_leaderboard.py    榜单注册表（BOARDS）+ 排行榜实现 + 帮助自动生成
+├── wows_constants.py      常量：服务器、对局类型、额外播报项、公开命令
+├── wows_config.py         配置模型
+├── wows_api.py            Vortex API 客户端（图鉴/玩家查询）
+├── wows_stats.py          统计快照、差值检测、播报格式化
+├── wows_cards.py          help/status/list 图片卡片生成（榜单开关区自动生成）
+├── wows_battle_log.py     战斗日志存储与查询
+├── wows_nl_query.py       自然语言查询引擎（@bot 提问战绩）
+├── wows_ship_db.py        舰种图鉴本地缓存
+├── wows_state_store.py    状态文件存储与旧数据迁移
+├── wows_utils.py          模板读取、背景图、图片渲染发送
+├── config.toml            运行时配置（Runner 自动生成）
+├── _manifest.json         插件清单
 ├── assets/templates/*.html   图片卡片模板
-├── assets/images/           背景图（按页面名或通用 bg）
-├── README.md        本说明
-└── boards_help.md   榜单增删使用说明书
+├── assets/images/            背景图（按页面名或通用 bg）
+├── tests/                    回归测试
+├── README.md              本说明
+└── boards_help.md         榜单增删使用说明书
 ```
 
 ## 榜单扩展
 
-新增/删除排行榜请阅读 **`boards_help.md`**。核心：在 `leaderboard.py` 注册一行，命令、排行榜帮助、管理员开关、status 状态、跨天结算全部自动生成。
+新增/删除排行榜请阅读 **`boards_help.md`**。核心：在 `wows_leaderboard.py` 注册一行，命令、排行榜帮助、管理员开关、status 状态、跨天结算全部自动生成。
