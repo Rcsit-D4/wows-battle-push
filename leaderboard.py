@@ -70,8 +70,7 @@ def _empty_panel(text: str) -> str:
 
 
 # ---------- 榜单注册表 ----------
-# 新增榜单：写 rank_fn + build_html_fn（+ 月榜/月度/昨日信息可选），再 register_board 一行即可。
-# 命令、帮助、状态、跨天推送均由此自动生成。
+# 新增榜单：实现 rank_fn + build_html_fn 后 register_board 一行，命令/帮助/状态/跨天推送自动生成
 
 BOARDS: dict[str, dict] = {}
 
@@ -160,10 +159,7 @@ def cmd_specs(key: str, board: dict) -> list[dict]:
 # ---------- 状态数据管理 ----------
 
 def _migrate_enabled(sd: dict) -> dict[str, bool]:
-    """enabled 字段迁移：旧格式为 bool(king)/xxx_enabled，统一为 {key: bool}。
-
-    只保留当前注册表中的榜单 key，避免已删除榜单的历史残留导致状态页 KeyError。
-    """
+    """enabled 迁移：旧格式 bool/xxx_enabled → {key: bool}，只留当前注册表的 key"""
     enabled = sd.get("enabled")
     if isinstance(enabled, dict):
         return {key: bool(enabled.get(key, False)) for key in BOARDS}
@@ -181,11 +177,7 @@ def _migrate_last(sd: dict) -> dict:
 
 
 def get_stream_data(state: dict, stream_id: str) -> dict:
-    """获取某群的排行榜状态，只做字段补齐/迁移。
-
-    跨天结算由 ``check_daily_reset`` 统一负责；这里不能改 ``date``，否则命令
-    在 0 点后先执行时会抢先消费结算，导致昨日 history/月度/推送丢失。
-    """
+    """取某群榜单状态，只做字段补齐；不能改 date，跨天结算统一交给 check_daily_reset"""
     dk = state.setdefault("daily_king", {})
     sd = dk.get(stream_id)
     if sd is None:
@@ -455,13 +447,7 @@ def _last_info_wopi(ranked, day) -> dict:
 async def check_daily_reset(state, ctx, send_image_fn, logger,
                             get_records_fn=None, is_monitored_fn=None, get_nickname_fn=None,
                             is_paused_fn=None, send_push: bool = True) -> bool:
-    """跨天结算：补 history / 月度，按需推送昨日榜。
-
-    规则：
-    - 正常跨天（只差一天）：结算昨日并推送昨日榜；
-    - 停机多天：逐日补 history / 月度，但不推送，避免恢复时刷屏；
-    - ``send_push=False`` 或群暂停：仍结算数据，只是不发送图片。
-    """
+    """跨天结算：正常跨天推昨日榜；停机多天只补数据；send_push=False 或暂停仍结算"""
     today = date.today()
     today_iso = today.isoformat()
     yesterday = today - timedelta(days=1)
@@ -533,8 +519,12 @@ async def check_daily_reset(state, ctx, send_image_fn, logger,
                     if not ranked:
                         continue
 
-                    sd.setdefault("history", {}).setdefault(day_iso, {})[key] = ranked
-                    if board.get("monthly_update_fn"):
+                    # 同一天同一榜已经结算过就只覆盖 history，不再累加月度，
+                    # 否则进程在逐日循环中途被杀后重放会把月度积分算两遍
+                    day_history = sd.setdefault("history", {}).setdefault(day_iso, {})
+                    already_settled = key in day_history
+                    day_history[key] = ranked
+                    if board.get("monthly_update_fn") and not already_settled:
                         board["monthly_update_fn"](sd, ranked, day_iso[:7])
                     last_info = board["last_info_fn"](ranked, day_iso) if board.get("last_info_fn") else None
                     if last_info:
@@ -705,8 +695,7 @@ def get_history(sd, key, date_iso):
 # ---------- 排行榜帮助（自动生成） ----------
 
 def _board_help_rows() -> str:
-    """从注册表生成排行榜帮助内容块（HTML），命令文本做 HTML 转义。
-    仅遍历英文命令规格（已内嵌中文别名），跳过中文规格与开关，避免重复"""
+    """生成帮助行 HTML；只遍历英文命令规格（已内嵌中文别名），跳过开关"""
     rows = ""
     for key, board in BOARDS.items():
         rows += '<div class="cmd-item"><div class="cmd-left">'

@@ -73,10 +73,6 @@ class ShipDb:
     def ship_name(self, ship_id: Any) -> str:
         return self._entry(ship_id).get("name", "")
 
-    def ship_type_cn(self, ship_id: Any) -> str:
-        """返回中文舰种名；未知舰种返回空串"""
-        return SHIP_TYPE_CN.get(self._entry(ship_id).get("type", ""), "")
-
     def ship_type_en(self, ship_id: Any) -> str:
         """返回英文舰种代码（AirCarrier等）；未知返回空串"""
         return self._entry(ship_id).get("type", "")

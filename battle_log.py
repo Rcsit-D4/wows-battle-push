@@ -59,10 +59,7 @@ class BattleLogStore:
         self._dirty = True
 
     def flush(self) -> None:
-        """把累积的记录一次性写盘（轮询结束调用，减少 IO）。
-
-        写入失败时保留脏标记，下次轮询继续重试，避免静默丢日志。
-        """
+        """一次性写盘（轮询结束调用）；失败保留脏标记，下轮重试，避免静默丢日志"""
         if not self._dirty:
             return
         if self._save():

@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,20 +18,28 @@ class WowsApi:
         self.retries = retries
 
     def _get(self, url: str, headers: dict[str, str] | None = None) -> bytes:
-        """同步 HTTP GET，带重试；headers 缺省使用 Vortex 头"""
+        """同步 HTTP GET，带重试；headers 缺省使用 Vortex 头
+
+        4xx 属于不可恢复错误（UID 不存在、无权限），直接失败不重试；
+        其余错误重试并逐次退避，避免在接口故障时连续猛打。
+        """
         headers = headers or VORTEX_HEADERS
         last_exc: Exception | None = None
-        for attempt in range(self.retries + 1):  # 首次请求 + retries 次重试
+        for attempt in range(self.retries + 1):
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}")
                     return resp.read()
+            except urllib.error.HTTPError as e:
+                if 400 <= e.code < 500:
+                    raise RuntimeError(f"请求失败 {url}: HTTP {e.code}") from e
+                last_exc = e
             except (urllib.error.URLError, OSError, RuntimeError) as e:
                 last_exc = e
-                if attempt < self.retries:
-                    continue
+            if attempt < self.retries:
+                time.sleep(0.5 * (attempt + 1))
         raise RuntimeError(f"请求失败 {url}: {last_exc}") from last_exc
 
     async def _get_async(self, url: str, headers: dict[str, str] | None = None) -> bytes:
@@ -62,7 +71,8 @@ class WowsApi:
         if not records:
             return f"Account{account_id}", {}
 
-        first = next(iter(records.values()))
+        # data 以 UID 字符串为键；按请求的 account_id 精确取，不依赖"只有一条"的巧合
+        first = records.get(str(account_id)) or next(iter(records.values()))
         name = first.get("name") or f"Account{account_id}"
         stats: dict[int, dict[str, Any]] = {}
         for sid, v in (first.get("statistics") or {}).items():
@@ -70,6 +80,29 @@ class WowsApi:
             if bt_stats:
                 stats[int(sid)] = bt_stats
         return name, stats
+
+    async def fetch_account_summary(
+        self, server: str, account_id: int
+    ) -> tuple[str, dict[str, int]]:
+        """账号级摘要 (昵称, {对局类型: 累计场次})；约 100KB，该值等于逐船求和"""
+        server_upper = server.upper()
+        if server_upper not in SERVER_VORTEX:
+            raise ValueError(f"无效服务器: {server}")
+        base = SERVER_VORTEX[server_upper]
+        url = f"{base}/api/accounts/{account_id}/"
+
+        data = self._parse_json(await self._get_async(url), url)
+        if data.get("status") != "ok":
+            raise RuntimeError(f"Vortex API 异常 status={data.get('status')} url={url}")
+
+        records = data.get("data") or {}
+        ent = records.get(str(account_id)) or next(iter(records.values()), {}) or {}
+        name = ent.get("name") or f"Account{account_id}"
+        totals: dict[str, int] = {}
+        for bt, v in (ent.get("statistics") or {}).items():
+            if isinstance(v, dict) and isinstance(v.get("battles_count"), int):
+                totals[str(bt)] = int(v["battles_count"])
+        return name, totals
 
     async def fetch_ship_catalog(self) -> dict[str, dict]:
         """拉取图鉴全量：{str(shipId): {name, type, tier}}，type 为英文舰种代码"""

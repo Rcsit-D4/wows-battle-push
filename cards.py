@@ -4,7 +4,7 @@
 from html import escape
 
 from constants import EXTRA_ITEMS, MODE_TEXT
-from stats import normalize_extra
+from stats import format_damage_range, normalize_extra
 from leaderboard import BOARDS, cmd_specs
 from utils import bg_style, read_template
 
@@ -113,15 +113,7 @@ def build_status_html(binding: dict | None, board_enabled: dict[str, bool], nl_e
     mode_text = MODE_TEXT.get(mode, str(mode))
     extra = normalize_extra(binding.get("extra"))
     low, high = binding.get("damage_low", 0) or 0, binding.get("damage_high", 0) or 0
-    if low == 0 and high == 0:
-        range_text = "全部播报"
-    else:
-        parts = []
-        if low:
-            parts.append(f"≤{low} 播报")
-        if high:
-            parts.append(f"≥{high} 播报")
-        range_text = " / ".join(parts)
+    range_text = format_damage_range(low, high)
     accounts = binding.get("accounts", [])
 
     def tag(on: bool) -> str:

@@ -37,6 +37,8 @@ SNAPSHOT_KEEP: set[str] = {
     "survived", "win_and_survived",
     "planes_killed", "ships_spotted",
     "capture_points", "dropped_capture_points",
+    # WG 现行占点/防守字段（旧 capture_points 已废弃，保留两者以兼容历史快照）
+    "control_captured_points", "control_dropped_points",
     "shots_by_main", "hits_by_main", "shots_by_tpd", "hits_by_tpd",
 }
 
@@ -61,11 +63,8 @@ def detect_new_battles(
     new: dict[int, dict[str, int]],
     max_battles: int | None = 5,
 ) -> dict[int, dict[str, int]]:
-    """对比新旧快照，返回有新增对局的船及其差值。
-    - 首次绑定（old 为空）：所有船跳过，不报历史
-    - 老船（old 有）：差值 = new - old
-    - 新船（old 无但 old 非空）：差值 = new 累计值；battles==1 正常播报，>1 只落盘不播报（历史遗留防刷屏）
-    max_battles=None 返回所有新增（不限局数，供日志完整落盘），默认仅返回 1~max_battles 局（供播报）。"""
+    """对比新旧快照返回新增对局；old 空＝首检全跳过，新船 battles>1 只落盘；
+    max_battles 控制播报范围（None 表示不限，供日志完整落盘）"""
     # 兼容旧快照：ship_id key 可能是字符串，统一转成整数
     old = {int(k): v for k, v in old.items() if str(k).isdigit()}
     result: dict[int, dict[str, int]] = {}
@@ -84,7 +83,8 @@ def detect_new_battles(
                     d["_skip_broadcast"] = True
                 result[ship_id] = d
             continue
-        d = {k: n.get(k, 0) - o.get(k, 0) for k in set(n) | set(o)}
+        d = {k: (0 if k not in o else n.get(k, 0) - o.get(k, 0)) for k in set(n) | set(o)}
+        # k not in o 取 0：老快照没有该字段（如 control_*）说明是首次采集，只能建基线
         d.update(_broadcast_fields(d))
         b = d.get("battles", 0)
         if b > 0 and (max_battles is None or b <= max_battles):
@@ -110,6 +110,18 @@ def should_broadcast_damage(damage: int, low: int, high: int) -> bool:
     if high > 0 and damage >= high:
         return True
     return False
+
+
+def format_damage_range(low: int, high: int) -> str:
+    """伤害过滤的展示文案（过滤语义见 should_broadcast_damage：两端才播报）"""
+    if low <= 0 and high <= 0:
+        return "全部播报"
+    parts = []
+    if low > 0:
+        parts.append(f"≤{low} 播报")
+    if high > 0:
+        parts.append(f"≥{high} 播报")
+    return " / ".join(parts)
 
 
 def get_type_label(battle_type: str, display_mode: int) -> str:

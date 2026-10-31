@@ -1,12 +1,4 @@
-"""多文件状态存储：groups / snapshots / leaderboard / pending 独立文件 + 旧 data.json 自动迁移
-
-文件均位于插件目录下的 data/ 文件夹：
-- groups.json      群配置（良好可读缩进）
-- snapshots.json   账号快照（紧凑）
-- leaderboard.json 榜单数据（紧凑）
-- pending.json     待补发事件（紧凑，手动检查/发送失败时使用）
-- battle.json      战斗日志（紧凑，由 BattleLogStore 管理）
-"""
+"""状态存储：groups/snapshots/leaderboard/pending/battle.json 分文件存于 data/，并迁移旧 data.json"""
 
 import json
 import logging
@@ -42,10 +34,7 @@ class StateStore:
 
     # ---------- 迁移 ----------
     def _migrate_legacy(self) -> None:
-        """旧 data.json / battle.json 拆分或移动到 data/ 目录，幂等。
-
-        逐文件判断，只补缺失文件，避免迁移中断后旧 data.json 覆盖新文件。
-        """
+        """旧 data.json / battle.json 归位到 data/（幂等，只补缺失文件，避免覆盖新数据）"""
         legacy = self._dir / LEGACY_FILE
         new_files = {
             self._data_dir / GROUPS_FILE: (

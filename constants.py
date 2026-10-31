@@ -71,6 +71,7 @@ EXTRA_ITEMS: dict[str, str] = {
 }
 
 # 指令参数 -> 快照字段名（record 无对应字段，特殊处理）
+# cap/drop 用 control_* 字段：WG 已废弃 capture_points/dropped_capture_points
 EXTRA_SNAPSHOT_KEY: dict[str, str] = {
     "kills": "kills",
     "xp": "xp",
@@ -79,8 +80,8 @@ EXTRA_SNAPSHOT_KEY: dict[str, str] = {
     "plane": "planes_killed",
     "spot": "ships_spotted",
     "surv": "survived",
-    "cap": "capture_points",
-    "drop": "dropped_capture_points",
+    "cap": "control_captured_points",
+    "drop": "control_dropped_points",
 }
 
 # 旧长参数名 -> 新短参数名（兼容旧数据）

@@ -16,6 +16,7 @@ TOOL_DESCRIPTION = (
     "player 可用群昵称或游戏ID（如'XXX'），用户明确提到某人时必填，不填表示统计本群全部绑定玩家；"
     "用户说'我/自己/本人'时 player 填'我'，工具会通过发送者QQ绑定自动解析到对应账号；"
     "date 支持'今天/昨天/这个星期/上周/这个月/上月/最近N天/YYYY-MM-DD'，不填默认今天；"
+    "用户的时间说法不在上述列表里时（如'前天/上周三/10月20号'），必须先自行换算成 YYYY-MM-DD 或 最近N天 再填，不要原样透传；"
     "ship_type 为舰种中文名（航母/战列舰/巡洋舰/驱逐舰/潜艇，潜艇俗称'小人'）。"
     "用户提到舰种/船种/某类船时，必须把 ship_type 填上交给工具过滤，禁止自行判断某艘船属于什么舰种；"
     "metric 必填：最高伤害/最高击杀/场均伤害/场次/胜场/玩家列表。"
@@ -40,14 +41,33 @@ METRIC_ALIASES = {
     "玩家列表": "玩家列表", "谁玩了": "玩家列表", "谁": "玩家列表",
 }
 
+# 顺序即优先级："最高击杀"必须早于"最高伤害"，否则"单场最高击杀"会被误判
+_METRIC_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("最高击杀", ("最高击杀", "击杀最多", "最多击杀", "单场最高击杀", "人头最多")),
+    ("最高伤害", ("最高伤害", "最高输出", "最大伤害", "伤害最高", "单场最高", "最高单场")),
+    ("场均伤害", ("场均", "平均伤害", "平均输出")),
+    ("玩家列表", ("玩家列表", "谁玩", "都有谁", "哪些人", "谁在玩", "谁打了")),
+    ("胜场", ("胜场", "赢了", "胜率", "胜利")),
+    ("场次", ("场次", "局数", "多少把", "多少盘", "多少局", "打了几")),
+]
 
-def normalize_metric(metric: str) -> str:
-    """把 LLM 给的指标名归一化到 METRICS"""
+
+def normalize_metric(metric: str) -> str | None:
+    """指标归一化；返回 None 表示给了指标但认不出，由调用方明确报错"""
     m = (metric or "").strip()
-    return METRIC_ALIASES.get(m, m if m in METRICS else "场次")
+    if not m:
+        return "场次"  # 未提供时兜底；Tool 侧 metric 为必填，正常不会走到
+    if m in METRIC_ALIASES:
+        return METRIC_ALIASES[m]
+    if m in METRICS:
+        return m
+    for name, keys in _METRIC_KEYWORDS:
+        if any(k in m for k in keys):
+            return name
+    return None
 
 
-def normalize_ship_type(ship_type: str, ship_db: ShipDb) -> str | None:
+def normalize_ship_type(ship_type: str) -> str | None:
     """把用户舰种说法归一化为英文代码；无法识别返回 None（不限舰种）"""
     t = (ship_type or "").strip()
     if not t:
@@ -80,7 +100,6 @@ def _match_account(records: list[dict], player_query: str, group_accounts: list[
     q = (player_query or "").strip()
     if not q:
         return list(group_accounts)
-    # 数字直接当 account_id
     if q.isdigit():
         return [a for a in group_accounts if str(a.get("account_id")) == q]
     # 群昵称包含匹配（输入短昵称匹配群内完整昵称）
@@ -105,7 +124,7 @@ def _format_num(n: float | int) -> str:
     return f"{n:,.0f}"
 
 
-def _stats_block(records: list[dict], ship_db: ShipDb, group_accounts: list[dict]) -> list[dict]:
+def _stats_block(records: list[dict], group_accounts: list[dict]) -> list[dict]:
     """按账号聚合：{acc, records, total_damage, max_damage, max_kills, count, wins}"""
     acc_by_id = {a.get("account_id"): a for a in group_accounts}
     blocks: dict[int, dict] = {}
@@ -138,12 +157,7 @@ def run_query(
     metric: str = "场次",
     scope: str = "",
 ) -> str:
-    """执行一次自然语言查询，返回结构化文本供 LLM 组织回复。
-
-    records: 某日期区间的全部 battle 记录（单局一条）
-    group_accounts: 当前群绑定的账号列表
-    scope: 查询范围描述（如'今天'/'这个星期'），有值时在结果首行输出【scope】
-    """
+    """执行查询并返回文本；scope 有值时首行输出【scope】"""
     body = _run_query_impl(records, ship_db, group_accounts, player, ship_type, metric)
     if scope and body and not body.startswith("没有"):
         return f"【{scope}】\n{body}"
@@ -159,25 +173,27 @@ def _run_query_impl(
     metric: str = "场次",
 ) -> str:
     """查询主体：返回结果文本（不含范围头）"""
+    m = normalize_metric(metric)
+    if m is None:
+        return f"没听懂要统计「{metric}」，目前支持：{'、'.join(METRICS)}。"
     if not records:
         return "该条件下没有找到任何战斗记录。"
-    st = normalize_ship_type(ship_type, ship_db)
-    m = normalize_metric(metric)
+    st = normalize_ship_type(ship_type)
     matched = _match_account(records, player, group_accounts)
     if not matched:
+        if not (player or "").strip():
+            return "本群还没有绑定任何账号，先让管理员用 /wows add 添加。"
         return f"没有在当前群绑定列表中找到与「{player}」匹配的账号。"
 
-    filtered = _filter_by_ship_type(records, ship_db, st)
-    if player and matched:
-        # 同一昵称可能匹配多个账号：先收敛到匹配账号，避免退化成“全群排行”
-        matched_ids = {a.get("account_id") for a in matched}
-        filtered = [r for r in filtered if r.get("account_id") in matched_ids]
+    # 记录来自全局日志：无论是否指定玩家都要收敛到本群账号，否则别的群的人会混进来
+    matched_ids = {a.get("account_id") for a in matched}
+    filtered = [r for r in _filter_by_ship_type(records, ship_db, st)
+                if r.get("account_id") in matched_ids]
     if not filtered:
-        label = f"舰种「{SHIP_TYPE_CN.get(st, st)}」" if st else "该舰种"
-        return f"该条件下（{label}）没有战斗记录。"
+        label = f"舰种「{SHIP_TYPE_CN.get(st, st)}」" if st else "该条件"
+        return f"{label}没有战斗记录。"
 
     if player and len(matched) == 1:
-        # 单玩家明细
         acc = matched[0]
         mine = [r for r in filtered if r.get("account_id") == acc.get("account_id")]
         name = _display_name(acc, mine[0] if mine else {})
@@ -208,7 +224,7 @@ def _run_query_impl(
         return f"{name} 共打了 {battles} 场"
 
     # 全群排行（或多人匹配）
-    blocks = _stats_block(filtered, ship_db, group_accounts)
+    blocks = _stats_block(filtered, group_accounts)
     if m == "玩家列表":
         lines = []
         for b in blocks:

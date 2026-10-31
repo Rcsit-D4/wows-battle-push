@@ -20,7 +20,6 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-# 确保插件目录在 sys.path 中，使同目录模块可导入
 sys.path.insert(0, str(Path(__file__).parent))
 
 import asyncio
@@ -74,6 +73,7 @@ from stats import (
     default_extra,
     detect_new_battles,
     format_battle,
+    format_damage_range,
     format_record_break,
     normalize_extra,
     should_broadcast_damage,
@@ -85,6 +85,20 @@ from utils import send_html_image
 # 手动检查只推当前群时，其他群的待补发事件保留时间与数量上限
 PENDING_TTL_SECONDS = 7 * 24 * 3600
 MAX_PENDING_EVENTS = 500
+
+# 一轮命中这么多船只可能是基线断档（停机/拉取长期失败后补齐）
+MAX_DIFF_SHIPS_PER_ROUND = 8
+
+# 单类型一轮的新增场次上限（正常 3 分钟最多 1 局），超过即判积压
+MAX_BACKLOG_BATTLES = 10
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    """容错取整：配置里出现非数字（手改、旧格式）时返回默认值，不让整轮轮询崩掉"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class WowsBattlePushPlugin(MaiBotPlugin):
@@ -104,8 +118,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self._last_snap_save: float = 0.0
         self._ship_db = ShipDb(Path(__file__).parent / "data" / "ship_db.json")
         self._ship_db_ts: float = 0.0
-        # 每账号一把锁：保证"读基线 → 差分 → 落日志 → 推播报 → 更新基线"只跑一次。
-        # 手动检查与后台轮询共用同一把锁，避免同一次差分被写两遍日志/推两遍。
+        # 每账号一把锁：读基线→差分→落日志→播报→更新基线只跑一次，手动检查与轮询共用
         self._account_locks: dict[str, asyncio.Lock] = {}
 
     # ---------- 账号级互斥 ----------
@@ -123,11 +136,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
     # ---------- 权限 ----------
     def _get_sender_id(self, kwargs: dict[str, Any]) -> str:
-        """从 Host 注入参数中提取发送者 QQ。
-
-        当前 Host 会直接传 ``user_id``；同时兼容文档中的 ``message`` 消息对象
-        以及旧版本可能传入的 ``sender`` / ``from_user`` 等字段。
-        """
+        """从 Host 注入参数中提取发送者 QQ（优先 user_id，兼容 message/raw_message 等旧字段）"""
         candidates: list[Any] = [
             kwargs.get("sender_id"),
             kwargs.get("user_id"),
@@ -183,7 +192,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if not binding:
             return None
         for acc in binding.get("accounts", []):
-            if str(acc.get("server", "")).upper() == server.upper() and int(acc.get("account_id", 0)) == account_id:
+            if str(acc.get("server", "")).upper() == server.upper() and _to_int(acc.get("account_id")) == account_id:
                 return acc
         return None
 
@@ -203,6 +212,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         try:
             mode = int(binding.get("display_mode", 3)) if binding else 3
         except (TypeError, ValueError):
+            self.ctx.logger.debug("显示模式非法，回退为 3: %r", (binding or {}).get("display_mode"))
             mode = 3
         return mode if mode in (1, 2, 3) else 3
 
@@ -214,6 +224,8 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             low = max(int(binding.get("damage_low", 0)), 0)
             high = max(int(binding.get("damage_high", 0)), 0)
         except (TypeError, ValueError):
+            self.ctx.logger.debug("伤害范围非法，按不过滤处理: low=%r high=%r",
+                                  binding.get("damage_low"), binding.get("damage_high"))
             low, high = 0, 0
         return low, high
 
@@ -248,8 +260,9 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if not binding:
             return set()
         return {
-            f"{str(a.get('server', '')).upper()}:{int(a.get('account_id', 0))}"
+            f"{str(a.get('server', '')).upper()}:{_to_int(a.get('account_id'))}"
             for a in binding.get("accounts", [])
+            if _to_int(a.get("account_id")) > 0
         }
 
     # ---------- 生命周期 ----------
@@ -330,7 +343,11 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                         "content": "尚未找到你的绑定：请先用 /add <服务器> <UID> me 完成 QQ 绑定，或用群昵称/游戏ID查询。"}
             player = str(mine.get("account_id"))
         try:
-            start, end = self._parse_date_range(date)
+            start, end, recognized = self._parse_date_range(date)
+            if not recognized:
+                return {"success": False,
+                        "content": f"没听懂「{date}」这个时间。可以说 今天 / 昨天 / 这个星期 / "
+                                   f"最近7天 / 2026-10-21 这样的说法。"}
             if not self._ship_db.loaded:
                 try:
                     await self._ship_db.refresh(self._api)
@@ -348,37 +365,43 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             return {"success": False, "content": "查询失败，请稍后再试。"}
 
     @staticmethod
-    def _parse_date_range(date_text: str) -> tuple[str, str]:
-        """把日期说法解析为 (起始日期, 结束日期) %Y-%m-%d；单日则 start==end"""
+    def _parse_date_range(date_text: str) -> tuple[str, str, bool]:
+        """解析日期说法为 (起, 止, 是否识别)；未识别必须由调用方提示，不得静默按今天查询"""
         today = date.today()
         t = (date_text or "").strip()
         if not t or t in ("今天", "今日"):
-            return today.isoformat(), today.isoformat()
+            return today.isoformat(), today.isoformat(), True
         if t in ("昨天", "昨日"):
             d = today - timedelta(days=1)
-            return d.isoformat(), d.isoformat()
+            return d.isoformat(), d.isoformat(), True
+        if t in ("前天", "前日"):
+            d = today - timedelta(days=2)
+            return d.isoformat(), d.isoformat(), True
         if t in ("这个星期", "本周", "这周"):
             start = today - timedelta(days=today.weekday())  # 本周一
-            return start.isoformat(), today.isoformat()
+            return start.isoformat(), today.isoformat(), True
         if t in ("上星期", "上周"):
             this_monday = today - timedelta(days=today.weekday())
             last_sunday = this_monday - timedelta(days=1)
             last_monday = this_monday - timedelta(days=7)
-            return last_monday.isoformat(), last_sunday.isoformat()
-        if t in ("这个月", "本月"):
-            return today.replace(day=1).isoformat(), today.isoformat()
+            return last_monday.isoformat(), last_sunday.isoformat(), True
+        if t in ("这个月", "本月", "这月"):
+            return today.replace(day=1).isoformat(), today.isoformat(), True
         if t in ("上个月", "上月"):
             last_month_end = today.replace(day=1) - timedelta(days=1)
-            return last_month_end.replace(day=1).isoformat(), last_month_end.isoformat()
-        m = re.fullmatch(r"最近(\d+)天", t)
+            return last_month_end.replace(day=1).isoformat(), last_month_end.isoformat(), True
+        m = re.fullmatch(r"最近\s*(\d+)\s*天", t)
         if m:
-            n = int(m.group(1))
-            return (today - timedelta(days=n - 1)).isoformat(), today.isoformat()
+            n = max(int(m.group(1)), 1)
+            return (today - timedelta(days=n - 1)).isoformat(), today.isoformat(), True
         m = re.fullmatch(r"(\d{4})[-/]?(\d{1,2})[-/]?(\d{1,2})", t)
         if m:
-            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            return d.isoformat(), d.isoformat()
-        return today.isoformat(), today.isoformat()
+            try:
+                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                return today.isoformat(), today.isoformat(), False
+            return d.isoformat(), d.isoformat(), True
+        return today.isoformat(), today.isoformat(), False
 
     # ---------- 状态存取 ----------
     def _load_state(self) -> None:
@@ -470,7 +493,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         seen: set[tuple[str, int]] = set()
         for binding in self._state["bindings"].values():
             for acc in binding.get("accounts", []):
-                key = (str(acc.get("server", "")).upper(), int(acc.get("account_id", 0)))
+                key = (str(acc.get("server", "")).upper(), _to_int(acc.get("account_id")))
                 if key[1] > 0:
                     seen.add(key)
         return sorted(seen)
@@ -499,14 +522,15 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             ):
                 self._save_leaderboard()
 
-            if not self.config.plugin.push_enabled:
+            push_enabled = self.config.plugin.push_enabled
+            if push_enabled:
+                await self._drain_pending()
+            elif self._pending_events():
                 # 关闭推送期间不保留待补发，避免重新开启时补发旧战绩
-                if self._pending_events():
-                    self._state["pending"] = []
-                    self._save_pending()
-                return
+                self._state["pending"] = []
+                self._save_pending()
 
-            await self._drain_pending()
+            # 关推送不等于不取数：照常拉取、落日志、推进基线，只是不播报
             await self._ensure_ship_db()
             accounts = self._unique_accounts()
             if not accounts:
@@ -518,16 +542,14 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             async def _check_guarded(server: str, account_id: int) -> None:
                 async with sem:
                     try:
-                        await self._check_account(server, account_id, enabled_types, push=True)
+                        await self._check_account(
+                            server, account_id, enabled_types, push=push_enabled
+                        )
                     except Exception:  # noqa: BLE001
                         self.ctx.logger.exception("检查账号 %s:%s 失败", server, account_id)
 
             await asyncio.gather(*(_check_guarded(s, a) for s, a in accounts))
-            # battle 日志暂定长久保存；如需定期清理，恢复此处 cleanup_old 调用
-            # if self._battle_log:
-            #     removed = self._battle_log.cleanup_old(self.config.plugin.log_retention_days)
-            #     if removed > 0:
-            #         self.ctx.logger.info("清理过期战斗日志 %d 条", removed)
+            # 战斗日志暂不自动清理（cleanup_old 已实现，需要时在此调用）
         finally:
             # 每轮结束统一写盘战斗日志；快照每小时兜底写盘一次
             if self._battle_log:
@@ -639,11 +661,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self, *, server: str, account_id: int, account_name: str,
         battle_type: str, ship_id: int, diff: dict[str, Any],
     ) -> None:
-        """战斗日志的唯一写入点：一次快照差分 → 一条日志记录。
-
-        手动检查、后台轮询、恢复刷新都只能经由这里落盘；调用方必须已持有该账号
-        的锁，保证同一次差分不会被写两遍（重复记录会让窝批榜场次翻倍）。
-        """
+        """战斗日志唯一写入点：一次差分一条记录，调用方须已持有账号锁"""
         if not self._battle_log:
             return
         self._battle_log.add_record({
@@ -670,11 +688,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self, server: str, account_id: int, battle_types: list[str], push: bool,
         stream_ids: set[str] | None = None, queue_others: bool = False,
     ) -> dict[str, list]:
-        """账号级检测入口：加锁后执行一次"拉取 → 差分 → 落日志 → 推送"。
-
-        战斗日志只有 ``_check_account_locked`` 里这一个写入点，一次差分只落一次。
-        后台轮询与手动检查都走这里，因此不会各写一份。
-        """
+        """账号级检测入口：加锁执行一次「拉取 → 差分 → 落日志 → 推送」"""
         async with self._account_lock(server, account_id):
             return await self._check_account_locked(
                 server, account_id, battle_types, push,
@@ -685,13 +699,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         self, server: str, account_id: int, battle_types: list[str], push: bool,
         stream_ids: set[str] | None = None, queue_others: bool = False,
     ) -> dict[str, list]:
-        """拉取账号各对局类型快照，检测新对局、存战斗日志、按需推送。
-
-        ``queue_others=True`` 用于手动检查：只立即推当前群，其他仍在监控该账号
-        的群进入待补发队列，避免全局基线被提前消费导致它们永久漏播。
-
-        调用方必须已持有该账号的锁（见 ``_check_account``）。
-        """
+        """执行一次检测；queue_others 供手动检查用，把其它群的播报排进补发队列"""
         snap_key = f"{server.upper()}:{account_id}"
         old_snap = self._state["snapshots"].get(snap_key) or {}
 
@@ -711,8 +719,51 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         name = old_snap.get("name") or f"Account{account_id}"
         results: dict[str, list] = {}
         failed_types: list[str] = []
+        fetched_ok: list[str] = []
 
-        for bt in battle_types:
+        # 先拉账号级摘要（约 100KB）探活，再决定要不要拉几百 KB 的类型全量
+        old_totals = old_snap.get("account_battles")
+        if not isinstance(old_totals, dict):
+            old_totals = {}
+        totals: dict[str, int] | None = None
+        try:
+            summary_name, totals = await self._api.fetch_account_summary(server, account_id)
+            if summary_name and summary_name != f"Account{account_id}":
+                name = summary_name
+        except Exception:  # noqa: BLE001
+            totals = None
+            self.ctx.logger.debug("账号摘要拉取失败 %s:%s，退回逐类型全量", server, account_id)
+
+        types_to_fetch: list[str] = list(battle_types)
+        if totals is not None:
+            types_to_fetch = []
+            for bt in battle_types:
+                old_total = old_totals.get(bt)
+                new_total = int(totals.get(bt, 0))
+                if not isinstance(old_total, int):
+                    types_to_fetch.append(bt)       # 该类型首次建基线
+                    continue
+                delta = new_total - old_total
+                if delta == 0:
+                    continue                        # 没打：直接跳过，省一次全量拉取
+                if delta < 0:
+                    types_to_fetch.append(bt)       # 计数回退，交给差分逻辑自愈
+                    continue
+                if delta > MAX_BACKLOG_BATTLES:
+                    # 积压：整账号重置基线，本轮既不播报也不落日志，下一轮静默重建
+                    self.ctx.logger.warning(
+                        "%s:%s %s 本轮新增 %d 场（上限 %d），判定基线断档："
+                        "本轮静默并重置该账号基线",
+                        server, account_id, bt, delta, MAX_BACKLOG_BATTLES,
+                    )
+                    self._state["snapshots"][snap_key] = {
+                        "name": name, "battle_types": {}, "updated": time.time(),
+                    }
+                    self._save_snapshots()
+                    return {}
+                types_to_fetch.append(bt)
+
+        for bt in types_to_fetch:
             try:
                 fetched_name, stats = await self._api.fetch_user_ships(server, account_id, bt)
             except Exception:  # noqa: BLE001
@@ -727,6 +778,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             if fetched_name and fetched_name != f"Account{account_id}":
                 name = fetched_name
             new_types[bt] = new_snap
+            fetched_ok.append(bt)
             old = old_types.get(bt) or {}
             if not old:
                 # 首次建立该类型基线：不播报历史战绩
@@ -734,6 +786,18 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             all_diffs = detect_new_battles(old, new_snap, max_battles=None)
             if not all_diffs:
                 continue
+            if len(all_diffs) > MAX_DIFF_SHIPS_PER_ROUND:
+                # 基线断档兜底：单船 1 场 × 几十艘船，逐船过滤拦不住，会一次播几十条
+                self.ctx.logger.warning(
+                    "检测到 %s:%s %s 单轮命中 %d 艘船（上限 %d），判定基线断档："
+                    "本轮不播报、不落日志，并重置基线",
+                    server, account_id, bt, len(all_diffs), MAX_DIFF_SHIPS_PER_ROUND,
+                )
+                self._state["snapshots"][snap_key] = {
+                    "name": name, "battle_types": {}, "updated": time.time(),
+                }
+                self._save_snapshots()
+                return {}
             diffs = {k: v for k, v in all_diffs.items()
                      if 0 < v.get("battles", 0) <= 5 and not v.get("_skip_broadcast")}
             results[bt] = list(diffs.values())
@@ -780,14 +844,24 @@ class WowsBattlePushPlugin(MaiBotPlugin):
                                   server, account_id, ", ".join(failed_types))
 
         if new_types:
-            # 内存基线始终更新（保持最新）；仅在有新对局或改名时写盘，避免每次轮询全量写入大快照
-            self._state["snapshots"][snap_key] = {"name": name, "battle_types": new_types, "updated": time.time()}
-            if results or name != old_snap.get("name"):
+            # 累计场次基准只按"本次真正拉到的类型"推进：某类型拉取失败时基准必须停在
+            # 旧值，否则下一轮探活会以为已经同步、永远不再补拉，那几局就丢了
+            new_totals: dict[str, int] = dict(old_totals)
+            for bt in fetched_ok:
+                new_totals[bt] = sum(
+                    int(s.get("battles_count") or 0) for s in (new_types.get(bt) or {}).values()
+                )
+            # 内存基线始终更新（保持最新）；有新对局、改名或累计场次推进时写盘
+            self._state["snapshots"][snap_key] = {
+                "name": name, "battle_types": new_types,
+                "account_battles": new_totals, "updated": time.time(),
+            }
+            if results or name != old_snap.get("name") or new_totals != old_totals:
                 self._save_snapshots()
         return results
 
     async def _refresh_snapshots_for_stream(self, stream_id: str) -> None:
-        """静默刷新该群所有账号的快照（暂停恢复时跳过历史战绩）"""
+        """静默刷新该群所有账号的基线（恢复推送时用），与轮询共用账号锁"""
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
             return
@@ -795,37 +869,52 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         enabled_types = self._enabled_types()
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
-            account_id = int(acc.get("account_id", 0))
+            account_id = _to_int(acc.get("account_id"))
             if account_id <= 0:
                 continue
-            snap_key = f"{server}:{account_id}"
-            new_types: dict[str, dict[int, dict[str, int]]] = {}
-            name = self._state.get("snapshots", {}).get(snap_key, {}).get("name") or f"Account{account_id}"
-            for bt in enabled_types:
-                try:
-                    fetched_name, stats = await self._api.fetch_user_ships(server, account_id, bt)
-                except Exception:  # noqa: BLE001
-                    self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
-                    continue
-                snap = summarize(stats)
-                if not snap:
-                    # 空结果保留旧基线，避免清空导致首轮漏播
-                    continue
-                if fetched_name and fetched_name != f"Account{account_id}":
-                    name = fetched_name
-                new_types[bt] = snap
-            if new_types:
-                old_types: dict[str, dict[int, dict[str, int]]] = {}
-                for bt, ships in (self._state.get("snapshots", {}).get(snap_key, {}).get("battle_types") or {}).items():
-                    if isinstance(ships, dict):
-                        old_types[bt] = {
-                            int(ship_id): stats for ship_id, stats in ships.items() if str(ship_id).isdigit()
-                        }
-                old_types.update(new_types)
-                self._state["snapshots"][snap_key] = {
-                    "name": name, "battle_types": old_types, "updated": time.time()
-                }
+            async with self._account_lock(server, account_id):
+                await self._refresh_one_account(server, account_id, enabled_types)
         self._save_snapshots()
+
+    async def _refresh_one_account(
+        self, server: str, account_id: int, enabled_types: list[str]
+    ) -> None:
+        """静默刷新单个账号的基线（调用方必须已持有该账号的锁）"""
+        snap_key = f"{server}:{account_id}"
+        old_snap = self._state.get("snapshots", {}).get(snap_key) or {}
+        new_types: dict[str, dict[int, dict[str, int]]] = {}
+        name = old_snap.get("name") or f"Account{account_id}"
+        for bt in enabled_types:
+            try:
+                fetched_name, stats = await self._api.fetch_user_ships(server, account_id, bt)
+            except Exception:  # noqa: BLE001
+                self.ctx.logger.warning("恢复刷新快照失败 %s:%s %s", server, account_id, bt)
+                continue
+            snap = summarize(stats)
+            if not snap:
+                # 空结果保留旧基线，避免清空导致首轮漏播
+                continue
+            if fetched_name and fetched_name != f"Account{account_id}":
+                name = fetched_name
+            new_types[bt] = snap
+        if not new_types:
+            return
+        old_types: dict[str, dict[int, dict[str, int]]] = {}
+        for bt, ships in (old_snap.get("battle_types") or {}).items():
+            if isinstance(ships, dict):
+                old_types[bt] = {
+                    int(ship_id): stats for ship_id, stats in ships.items() if str(ship_id).isdigit()
+                }
+        old_types.update(new_types)
+        # 保留探活基准，并按刚拉到的数据更新已刷新类型的累计场次
+        old_totals = old_snap.get("account_battles")
+        totals: dict[str, int] = dict(old_totals) if isinstance(old_totals, dict) else {}
+        for bt in new_types:
+            totals[bt] = sum(int(s.get("battles_count") or 0) for s in new_types[bt].values())
+        self._state["snapshots"][snap_key] = {
+            "name": name, "battle_types": old_types,
+            "account_battles": totals, "updated": time.time(),
+        }
 
     async def _broadcast_event(self, event: dict[str, Any], stream_ids: set[str] | list[str]) -> dict[str, bool]:
         """按 stream 逐个应用显示模式/伤害范围/额外项并发送，返回每个 stream 是否成功。"""
@@ -964,7 +1053,6 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if server not in SERVER_VORTEX:
             return await self._reply(stream_id, f"服务器参数无效：{server}（可用 CN/ASIA/EU/NA/RU 或 国服/亚服/欧服/美服/俄服）")
 
-        # 数字直接当 UID，非数字调用昵称搜索
         if account.isdigit():
             account_id, game_name = int(account), account
         else:
@@ -980,10 +1068,9 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if binding is None:
             return await self._reply(stream_id, "请先由管理员发送 /wows on 开启功能，再添加账号")
 
-        # 添加监控账号（已存在则跳过）
         accounts = binding.setdefault("accounts", [])
         exists = any(
-            str(a.get("server", "")).upper() == server and int(a.get("account_id", 0)) == account_id
+            str(a.get("server", "")).upper() == server and _to_int(a.get("account_id")) == account_id
             for a in accounts
         )
         if not exists:
@@ -1019,7 +1106,6 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if server not in SERVER_VORTEX:
             return await self._reply(stream_id, f"服务器参数无效：{server}（可用 CN/ASIA/EU/NA/RU 或 国服/亚服/欧服/美服/俄服）")
 
-        # 数字直接当 UID，非数字调用昵称搜索
         if account.isdigit():
             account_id = int(account)
         else:
@@ -1037,13 +1123,38 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         accounts = binding.get("accounts", [])
         new_accounts = [
             a for a in accounts
-            if not (str(a.get("server", "")).upper() == server and int(a.get("account_id", 0)) == account_id)
+            if not (str(a.get("server", "")).upper() == server and _to_int(a.get("account_id")) == account_id)
         ]
         if len(new_accounts) == len(accounts):
             return await self._reply(stream_id, f"未找到账号 {server} {account_id}")
         binding["accounts"] = new_accounts
+
+        # 清掉指向该账号的 QQ 绑定，避免"我"解析到一个已不在本群的账号
+        dropped_qq = 0
+        qq_bindings = binding.get("qq_bindings")
+        if isinstance(qq_bindings, dict):
+            for qq in list(qq_bindings):
+                target = qq_bindings.get(qq)
+                if not isinstance(target, dict):
+                    continue
+                if (str(target.get("server", "")).upper() == server
+                        and _to_int(target.get("account_id")) == account_id):
+                    del qq_bindings[qq]
+                    dropped_qq += 1
         self._save_bindings()
-        return await self._reply(stream_id, f"已移除账号 {server} {account_id}")
+
+        # 所有群都不再监控这个账号时，删掉快照，避免孤儿数据一直留在文件里
+        snap_key = f"{server}:{account_id}"
+        pruned = False
+        if (server, account_id) not in set(self._unique_accounts()):
+            pruned = self._state["snapshots"].pop(snap_key, None) is not None
+            if pruned:
+                self._save_snapshots()
+
+        tail = f"，同时解绑 {dropped_qq} 个 QQ" if dropped_qq else ""
+        if pruned:
+            tail += "，已清理该账号快照"
+        return await self._reply(stream_id, f"已移除账号 {server} {account_id}{tail}")
 
     @Command("wows_list", pattern=r"^/wows\s+list$")
     async def cmd_list(self, **kwargs):
@@ -1054,7 +1165,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
             lines = ["本群监控账号："]
             for acc in binding["accounts"]:
                 server = str(acc.get("server", "")).upper()
-                aid = int(acc.get("account_id", 0))
+                aid = _to_int(acc.get("account_id"))
                 game_name = self._get_game_name(server, aid)
                 nick = str(acc.get("nickname") or "")
                 lines.append(f"· {server} | UID:{aid} | 游戏ID:{game_name} | 群昵称:{nick if nick else '无'}")
@@ -1080,15 +1191,7 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         board_enabled = kd["enabled"]
         extra_text = " ".join(f"{k}={'开' if v else '关'}" for k, v in extra.items())
         board_text = " ".join(f"{leaderboard.BOARDS[key]['title_cn']}={'开' if v else '关'}" for key, v in board_enabled.items())
-        if dmg_low == 0 and dmg_high == 0:
-            range_text = "全部播报"
-        else:
-            parts = []
-            if dmg_low:
-                parts.append(f"≤{dmg_low} 播报")
-            if dmg_high:
-                parts.append(f"≥{dmg_high} 播报")
-            range_text = " / ".join(parts)
+        range_text = format_damage_range(dmg_low, dmg_high)
         fallback = (
             f"推送状态：{'暂停' if binding.get('paused') else '运行中'}\n"
             f"自然语言查询：{'开启' if binding.get('nl_enabled', NL_DEFAULT_ENABLED) else '关闭'}\n"
@@ -1106,35 +1209,37 @@ class WowsBattlePushPlugin(MaiBotPlugin):
 
     @Command("wows_check", pattern=r"^/wows\s+check$")
     async def cmd_check(self, **kwargs):
-        """手动触发一次立即拉取（等价于本群账号此刻跑一轮轮询）。
-
-        本身不产生战斗日志：日志仍然由"快照差分"写入，且一次差分只写一次。
-        若后台轮询正在检查同一账号，这里直接跳过并提示，避免重复检测。
-        """
+        """手动触发一次立即拉取；日志仍由差分写入，账号正在检查时跳过并提示"""
         stream_id = kwargs["stream_id"]
         binding = self._get_binding(stream_id)
         if not binding or not binding.get("accounts"):
             return await self._reply(stream_id, "本群暂无监控账号")
         await self._ensure_ship_db()
         enabled_types = self._enabled_types()
+        # 暂停＝仅本群不播报，数据照常获取；其它群仍要进补发队列，否则会永久漏播
+        paused = bool(binding.get("paused"))
         has_new = False
         busy: list[str] = []
         for acc in binding["accounts"]:
             server = str(acc.get("server", "")).upper()
-            account_id = int(acc.get("account_id", 0))
+            account_id = _to_int(acc.get("account_id"))
             if self._is_account_busy(server, account_id):
                 busy.append(f"{server} {account_id}")
                 continue
             try:
                 results = await self._check_account(
                     server, account_id, enabled_types, push=True,
-                    stream_ids={stream_id}, queue_others=True,
+                    stream_ids=set() if paused else {stream_id}, queue_others=True,
                 )
                 if any(results.values()):
                     has_new = True
             except Exception:  # noqa: BLE001
                 self.ctx.logger.exception("手动检查失败 %s:%s", server, account_id)
         if has_new:
+            if paused:
+                return await self._reply(
+                    stream_id, "检查完成：发现新对局，已写入日志（本群推送已暂停，不播报）"
+                )
             return True, "", 1
         if busy:
             return await self._reply(
@@ -1157,7 +1262,6 @@ class WowsBattlePushPlugin(MaiBotPlugin):
         if server not in SERVER_VORTEX:
             return await self._reply(stream_id, f"服务器参数无效：{server}（可用 {', '.join(SERVER_VORTEX)}）")
 
-        # 数字直接当 UID，非数字调用昵称搜索
         if account.isdigit():
             account_id = int(account)
         else:
@@ -1433,7 +1537,6 @@ def _install_board_commands(cls) -> None:
             setattr(cls, method_name, method)
 
 
-# 合并榜单公开命令到 PUBLIC_COMMANDS
 for _key, _board in leaderboard.BOARDS.items():
     for _spec in cmd_specs(_key, _board):
         if _spec["public"]:

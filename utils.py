@@ -52,7 +52,7 @@ def find_background_image(page: str = "") -> str | None:
                     _BG_CACHE[page] = (mtime, uri)
                     return uri
                 except Exception:
-                    pass
+                    logger.debug("背景图读取失败，跳过: %s", path, exc_info=True)
     if cached is not None:
         return cached[1]
     _BG_CACHE[page] = (0.0, None)
@@ -106,11 +106,7 @@ async def send_html_image(ctx, stream_id: str, html: str, fallback_text: str, lo
 
 
 def atomic_write_json(path, data, indent=False) -> bool:
-    """原子写入 JSON：先写临时文件再重命名，防止写入中断损坏。
-
-    Returns:
-        bool: 写入成功返回 True；失败会记录日志并返回 False，调用方应保留脏标记重试。
-    """
+    """原子写入 JSON（先写 .tmp 再替换）；失败记日志并返回 False，调用方应重试"""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
